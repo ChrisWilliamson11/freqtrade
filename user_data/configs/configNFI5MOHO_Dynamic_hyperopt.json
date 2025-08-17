@@ -1,0 +1,158 @@
+{
+    "$schema": "https://schema.freqtrade.io/schema.json",
+    "max_open_trades": 4,
+    "stake_currency": "USDT",
+    "stake_amount": "unlimited",
+    "tradable_balance_ratio": 0.195,
+    "dry_run": true,
+    "dry_run_wallet": 2400,
+    "timeframe": "5m",
+    "trading_mode": "spot",
+    "margin_mode": "",
+    "strategy": "NFI5MOHO_Dynamic",
+    "stoploss": -0.10,
+    "minimal_roi": {
+        "0": 0.08,
+        "10": 0.04,
+        "30": 0.02,
+        "60": 0.01
+    },
+    "force_entry_enable": true,
+    "unfilledtimeout": {
+        "entry": 10,
+        "exit": 10
+    },
+    "entry_pricing": {
+        "price_side": "same",
+        "use_order_book": false,
+        "order_book_top": 1,
+        "price_last_balance": 0.0,
+        "check_depth_of_market": {
+            "enabled": false
+        }
+    },
+    "exit_pricing": {
+        "price_side": "same",
+        "use_order_book": false,
+        "order_book_top": 1,
+        "price_last_balance": 0.0
+    },
+    "pairs": [
+        "BTC/USDT",
+        "ETH/USDT",
+        "BNB/USDT",
+        "SOL/USDT",
+        "ADA/USDT",
+        "LINK/USDT",
+        "DOGE/USDT",
+        "SUI/USDT"
+    ],
+    "exchange": {
+        "name": "binance",
+        "key": "sEsQ9MlMoVRzwZRkMYs8HzlcXFQJ70XF19X2lagY7XjNs4fJrJBN5wwdvbIQ4mg5",
+        "secret": "rAOdRrfQFFsNmyOt4rd8yXlnQMEnmCiB5VqoiplAa6miaqI9HIJU7AeUpcG1zEAV",
+        "ccxt_config": {
+            "enableRateLimit": true,
+            "websocket": true,
+            "rateLimit": 50,
+            "connectionTimeout": 30000,
+            "poolMaxConnections": 30,
+            "poolSize": 30
+        },
+        "ccxt_async_config": {
+            "enableRateLimit": true,
+            "websocket": true,
+            "rateLimit": 50,
+            "connectionTimeout": 30000,
+            "poolMaxConnections": 30,
+            "poolSize": 30
+        },
+        "pair_whitelist": [],
+        "pair_blacklist": [
+            ".*DOWN/BTC",
+            ".*UP/BTC",
+            ".*DOWN/ETH",
+            ".*UP/ETH",
+            ".*DOWN/USDT",
+            ".*UP/USDT",
+            "USDC/.*",
+            "BUSD/.*",
+            "DAI/.*",
+            "TUSD/.*",
+            "USDT/.*",
+            "LIT/.*"
+        ]
+    },
+    "pairlists": [
+        {
+            "method": "StaticPairList"
+        }
+    ],
+    "api_server": {
+        "enabled": true,
+        "listen_ip_address": "127.0.0.1",
+        "listen_port": 8082,
+        "verbosity": "error",
+        "enable_openapi": true,
+        "jwt_secret_key": "somethingrandom",
+        "username": "freqtrader",
+        "password": "password",
+        "CORS_origins": [
+            "http://127.0.0.1:8081",
+            "http://localhost:8081"
+        ],
+        "api_keys": [
+            {
+                "key": "NFI5M-DYNAMIC-ABCDE",
+                "secret": "supersecret123dynamic",
+                "permissions": [
+                    "view",
+                    "trade",
+                    "control"
+                ]
+            }
+        ]
+    },
+    "db_url": "sqlite:///trades3NFI5MOHO_Dynamic_bot.sqlite",
+    "database": {
+        "engine": "SQLite",
+        "pool_size": 20,
+        "max_overflow": 40,
+        "pool_timeout": 60,
+        "pool_recycle": 3600,
+        "pool_pre_ping": true
+    },
+    "logging_config": {
+        "version": 1,
+        "disable_existing_loggers": false,
+        "formatters": {
+            "standard": {
+                "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            }
+        },
+        "handlers": {
+            "default": {
+                "level": "INFO",
+                "formatter": "standard",
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout"
+            }
+        },
+        "loggers": {
+            "uvicorn.access": {
+                "handlers": [
+                    "default"
+                ],
+                "level": "ERROR",
+                "propagate": false
+            },
+            "freqtrade.worker": {
+                "handlers": [
+                    "default"
+                ],
+                "level": "WARNING",
+                "propagate": false
+            }
+        }
+    }
+} 

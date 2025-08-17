@@ -1,14 +1,19 @@
 # Freqtrade rules
 config*.json
+!user_data/configs/*.json
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
 logfile.txt
 user_data/*
 !user_data/strategy/sample_strategy.py
+!user_data/strategies/
+!user_data/configs/
 !user_data/notebooks
 !user_data/models
 !user_data/freqaimodels
+!user_data/*.py
+!user_data/*.json
 user_data/freqaimodels/*
 user_data/models/*
 user_data/notebooks/*
@@ -116,3 +121,13 @@ target/
 !config_examples/config_freqai.example.json
 
 docker-compose-*.yml
+
+# Custom exclusions for fork
+.last_result.json
+user_data/data/
+user_data/backtest_results/
+user_data/hyperopt_results/
+user_data/logs/
+user_data/plot/
+user_data/trades_log*/
+user_data/hyperopt_daily.log

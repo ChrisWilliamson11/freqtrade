@@ -24,9 +24,10 @@ class FreqaiExampleStrategy(IStrategy):
 
     This means this is *not* meant to be run live in production.
     """
-
+    can_short = False
+    
     minimal_roi = {"0": 0.1, "240": -1}
-
+    
     plot_config = {
         "main_plot": {},
         "subplots": {
@@ -42,7 +43,7 @@ class FreqaiExampleStrategy(IStrategy):
     use_exit_signal = True
     # this is the maximum period fed to talib (timeframe independent)
     startup_candle_count: int = 40
-    can_short = True
+
 
     def feature_engineering_expand_all(
         self, dataframe: DataFrame, period: int, metadata: dict, **kwargs
@@ -235,9 +236,17 @@ class FreqaiExampleStrategy(IStrategy):
         return dataframe
 
     def populate_entry_trend(self, df: DataFrame, metadata: dict) -> DataFrame:
+        #log error to show we are in this function
+
+
+        do_predict = df["do_predict"]
+        s_close = df["&-s_close"]
+
+        logger.error(f"\033[93mWe are in the populate_entry_trend function for {metadata['pair']}. Do predict: {do_predict}, S close: {s_close}\033[0m")
+
         enter_long_conditions = [
-            df["do_predict"] == 1,
-            df["&-s_close"] > 0.01,
+            do_predict == 1,
+            s_close > 0.01,
         ]
 
         if enter_long_conditions:
@@ -245,26 +254,12 @@ class FreqaiExampleStrategy(IStrategy):
                 reduce(lambda x, y: x & y, enter_long_conditions), ["enter_long", "enter_tag"]
             ] = (1, "long")
 
-        enter_short_conditions = [
-            df["do_predict"] == 1,
-            df["&-s_close"] < -0.01,
-        ]
-
-        if enter_short_conditions:
-            df.loc[
-                reduce(lambda x, y: x & y, enter_short_conditions), ["enter_short", "enter_tag"]
-            ] = (1, "short")
-
         return df
 
     def populate_exit_trend(self, df: DataFrame, metadata: dict) -> DataFrame:
         exit_long_conditions = [df["do_predict"] == 1, df["&-s_close"] < 0]
         if exit_long_conditions:
             df.loc[reduce(lambda x, y: x & y, exit_long_conditions), "exit_long"] = 1
-
-        exit_short_conditions = [df["do_predict"] == 1, df["&-s_close"] > 0]
-        if exit_short_conditions:
-            df.loc[reduce(lambda x, y: x & y, exit_short_conditions), "exit_short"] = 1
 
         return df
 

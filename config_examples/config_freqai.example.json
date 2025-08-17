@@ -1,13 +1,13 @@
 {
     "$schema": "https://schema.freqtrade.io/schema.json",
-    "trading_mode": "futures",
-    "margin_mode": "isolated",
-    "max_open_trades": 5,
+    "trading_mode": "spot",
+    "margin_mode": "",
+    "max_open_trades": 50,
     "stake_currency": "USDT",
     "stake_amount": 200,
     "tradable_balance_ratio": 1,
     "fiat_display_currency": "USD",
-    "dry_run": true,
+    "dry_run": false,
     "timeframe": "3m",
     "dry_run_wallet": 1000,
     "cancel_open_orders_on_exit": true,
@@ -17,13 +17,12 @@
     },
     "exchange": {
         "name": "binance",
-        "key": "",
-        "secret": "",
+        "key": "sEsQ9MlMoVRzwZRkMYs8HzlcXFQJ70XF19X2lagY7XjNs4fJrJBN5wwdvbIQ4mg5",
+        "secret": "rAOdRrfQFFsNmyOt4rd8yXlnQMEnmCiB5VqoiplAa6miaqI9HIJU7AeUpcG1zEAV",
         "ccxt_config": {},
         "ccxt_async_config": {},
         "pair_whitelist": [
-            "1INCH/USDT:USDT",
-            "ALGO/USDT:USDT"
+        "SOL/USDT"
         ],
         "pair_blacklist": []
     },
@@ -61,8 +60,8 @@
                 "1h"
             ],
             "include_corr_pairlist": [
-                "BTC/USDT:USDT",
-                "ETH/USDT:USDT"
+                "BTC/USDT",
+                "ETH/USDT"
             ],
             "label_period_candles": 20,
             "include_shifted_candles": 2,
@@ -82,10 +81,22 @@
         },
         "model_training_parameters": {}
     },
-    "bot_name": "",
+    "bot_name": "freqtraderFreqAI",
     "force_entry_enable": true,
     "initial_state": "running",
     "internals": {
         "process_throttle_secs": 5
-    }
+    },
+    "api_server": {
+        "enabled": true,
+        "listen_ip_address": "127.0.0.1",
+        "listen_port": 8081,
+        "verbosity": "error",
+        "enable_openapi": false,
+        "jwt_secret_key": "somethingrandom",
+        "CORS_origins": [],
+        "username": "freqtrader",
+        "password": "password"
+    },
+    "db_url": "sqlite:///tradesv3AI_bot.sqlite"
 }

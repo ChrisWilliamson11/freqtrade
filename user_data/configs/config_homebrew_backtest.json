@@ -1,0 +1,81 @@
+{
+    "max_open_trades": 2,
+    "stake_currency": "USDT",
+    "stake_amount": "unlimited",
+    "tradable_balance_ratio": 0.99,
+    "timeframe": "8h",
+    "dry_run": true,
+    "dry_run_wallet": 1000,
+    "cancel_open_orders_on_exit": false,
+    "trading_mode": "spot",
+    "margin_mode": "",
+    "unfilledtimeout": {
+        "entry": 10,
+        "exit": 10
+    },
+    "entry_pricing": {
+        "price_side": "same",
+        "use_order_book": true,
+        "order_book_top": 1,
+        "price_last_balance": 0.0,
+        "check_depth_of_market": {
+            "enabled": false,
+            "bids_to_ask_delta": 1
+        }
+    },
+    "exit_pricing": {
+        "price_side": "other",
+        "use_order_book": true,
+        "order_book_top": 1
+    },
+    "exchange": {
+        "name": "binance",
+        "key": "",
+        "secret": "",
+        "ccxt_config": {
+            "enableRateLimit": true
+        },
+        "ccxt_async_config": {
+            "enableRateLimit": true,
+            "rateLimit": 200
+        },
+        "pair_whitelist": [
+            "BTC/USDT",
+            "ETH/USDT",
+            "BNB/USDT",
+            "ADA/USDT",
+            "SOL/USDT",
+            "XRP/USDT",
+            "DOT/USDT",
+            "AVAX/USDT",
+            "MATIC/USDT",
+            "LINK/USDT",
+            "UNI/USDT",
+            "ATOM/USDT",
+            "LTC/USDT",
+            "ALGO/USDT",
+            "NEAR/USDT"
+        ],
+        "pair_blacklist": [
+            ".*DOWN/BTC",
+            ".*UP/BTC",
+            ".*DOWN/ETH",
+            ".*UP/ETH",
+            ".*DOWN/USDT",
+            ".*UP/USDT",
+            ".*_PREMIUM",
+            ".*BULL/.*",
+            ".*BEAR/.*"
+        ]
+    },
+    "pairlists": [
+        {
+            "method": "StaticPairList"
+        }
+    ],
+    "bot_name": "homebrew_backtest",
+    "force_entry_enable": true,
+    "initial_state": "running",
+    "strategy": "homebrew",
+    "strategy_path": "user_data/strategies/"
+} 

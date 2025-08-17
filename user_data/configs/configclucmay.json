@@ -1,0 +1,152 @@
+{
+    "$schema": "https://schema.freqtrade.io/schema.json",
+    "max_open_trades": 2,
+    "stake_currency": "USDT",
+    "stake_amount": "unlimited",
+    "tradable_balance_ratio": 0.9,
+    "amend_last_stake_amount": true,
+    "minimum_trade_amount": 20.0,
+    "dry_run": true,
+    "dry_run_wallet": 2000,
+    "cancel_open_orders_on_exit": false,
+    "trading_mode": "spot",
+    "margin_mode": "",
+    "bot_name": "Clucmay",
+    "strategy": "ClucMay72018",
+    "force_entry_enable": true,
+    "initial_state": "running",
+    "timeframe": "5m",
+    "timezone": "Pacific/Auckland",
+    "unfilledtimeout": {
+        "entry": 10,
+        "exit": 10
+    },
+    "entry_pricing": {
+        "price_side": "same",
+        "use_order_book": false,
+        "order_book_top": 1,
+        "price_last_balance": 0.0,
+        "check_depth_of_market": {
+            "enabled": false
+        }
+    },
+    "exit_pricing": {
+        "price_side": "same",
+        "use_order_book": false,
+        "order_book_top": 1,
+        "price_last_balance": 0.0
+    },
+    "pairs": [
+        "BTC/USDT",
+        "ETH/USDT",
+        "BNB/USDT",
+        "LINK/USDT",
+        "ADA/USDT",
+        "DOT/USDT",
+        "UNI/USDT",
+        "SOL/USDT",
+        "AVAX/USDT"
+    ],
+    "exchange": {
+        "name": "binance",
+        "key": "sEsQ9MlMoVRzwZRkMYs8HzlcXFQJ70XF19X2lagY7XjNs4fJrJBN5wwdvbIQ4mg5",
+        "secret": "rAOdRrfQFFsNmyOt4rd8yXlnQMEnmCiB5VqoiplAa6miaqI9HIJU7AeUpcG1zEAV",
+        "ccxt_config": {
+            "enableRateLimit": true,
+            "websocket": true,
+            "rateLimit": 50,
+            "connectionTimeout": 30000,
+            "poolMaxConnections": 30,
+            "poolSize": 30
+        },
+        "ccxt_async_config": {
+            "enableRateLimit": true,
+            "websocket": true,
+            "rateLimit": 50,
+            "connectionTimeout": 30000,
+            "poolMaxConnections": 30,
+            "poolSize": 30
+        },
+        "pair_whitelist": [],
+        "pair_blacklist": [
+            ".*DOWN/BTC",
+            ".*UP/BTC",
+            ".*DOWN/ETH",
+            ".*UP/ETH",
+            ".*DOWN/USDT",
+            ".*UP/USDT",
+            "USDC/.*",
+            "BUSD/.*",
+            "DAI/.*",
+            "TUSD/.*",
+            "USDT/.*"
+        ]
+    },
+    "pairlists": [
+        {
+            "method": "VolumePairList",
+            "number_assets": 150,
+            "sort_key": "quoteVolume"
+        },
+        {
+            "method": "AgeFilter",
+            "min_days_listed": 30
+        }
+    ],
+    "api_server": {
+        "enabled": true,
+        "listen_ip_address": "0.0.0.0",
+        "listen_port": 8084,
+        "verbosity": "error",
+        "enable_openapi": false,
+        "jwt_secret_key": "somethingrandom",
+        "CORS_origins": ["http://127.0.0.1:8081"],
+        "username": "freqtrader",
+        "password": "password"
+    },
+    "db_url": "sqlite:///trades3clucmay_bot.sqlite",
+    "database": {
+
+        "engine": "SQLite",
+    
+        "pool_size": 20,
+    
+        "max_overflow": 40,
+    
+        "pool_timeout": 60,
+    
+        "pool_recycle": 3600,
+    
+        "pool_pre_ping": true
+    
+        },
+    "logging_config": {
+        "version": 1,
+        "disable_existing_loggers": false,
+        "formatters": {
+            "standard": {
+                "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            }
+        },
+        "handlers": {
+            "default": {
+                "level": "INFO",
+                "formatter": "standard",
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout"
+            }
+        },
+        "loggers": {
+            "uvicorn.access": {
+                "handlers": ["default"],
+                "level": "ERROR",
+                "propagate": false
+            },
+            "freqtrade.worker": {
+                "handlers": ["default"],
+                "level": "WARNING",
+                "propagate": false
+            }
+        }
+    }
+}

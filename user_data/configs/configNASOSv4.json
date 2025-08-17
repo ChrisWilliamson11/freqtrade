@@ -1,0 +1,166 @@
+{
+    "$schema": "https://schema.freqtrade.io/schema.json",
+    "max_open_trades": 4,
+    "stake_currency": "USDT",
+    "stake_amount": "unlimited",
+    "tradable_balance_ratio": 1,
+    "amend_last_stake_amount": true,
+    "minimum_trade_amount": 20.0,
+    "dry_run": true,
+    "dry_run_wallet": 11404,
+    "cancel_open_orders_on_exit": false,
+    "trading_mode": "spot",
+    "margin_mode": "",
+    "timezone": "Pacific/Auckland",
+    "bot_name": "NASOSv4",
+    "strategy": "NASOSv4",
+    "force_entry_enable": true,
+    "initial_state": "running",
+    "timeframe": "5m",
+    "unfilledtimeout": {
+        "entry": 2,
+        "exit": 2
+    },
+    "pairs": [
+        "BTC/USDT",
+        "ETH/USDT",
+        "BNB/USDT",
+        "LINK/USDT",
+        "ADA/USDT",
+        "DOT/USDT",
+        "UNI/USDT",
+        "SOL/USDT",
+        "AVAX/USDT"
+    ],
+    "exchange": {
+        "name": "binance",
+        "key": "sEsQ9MlMoVRzwZRkMYs8HzlcXFQJ70XF19X2lagY7XjNs4fJrJBN5wwdvbIQ4mg5",
+        "secret": "rAOdRrfQFFsNmyOt4rd8yXlnQMEnmCiB5VqoiplAa6miaqI9HIJU7AeUpcG1zEAV",
+        "ccxt_config": {
+            "enableRateLimit": true,
+            "websocket": true,
+            "rateLimit": 100,
+            "connectionTimeout": 30000,
+            "timeout": 30000,
+            "enableLastJsonResponse": true,
+            "keepalive": true,
+            "ws": {
+                "options": {
+                    "handshakeTimeout": 10000,
+                    "timeout": 60000,
+                    "ping": 5000,
+                    "pong": 10000
+                }
+            },
+            "retry": {
+                "enabled": true,
+                "max": 5,
+                "delay": "exponential"
+            },
+            "poolMaxConnections": 10,
+            "poolSize": 10
+        },
+        "ccxt_async_config": {
+            "enableRateLimit": true,
+            "websocket": true,
+            "rateLimit": 100,
+            "connectionTimeout": 30000,
+            "timeout": 30000,
+            "enableLastJsonResponse": true,
+            "keepalive": true,
+            "ws": {
+                "options": {
+                    "handshakeTimeout": 10000,
+                    "timeout": 60000,
+                    "ping": 5000,
+                    "pong": 10000
+                }
+            },
+            "retry": {
+                "enabled": true,
+                "max": 5,
+                "delay": "exponential"
+            },
+            "poolMaxConnections": 10,
+            "poolSize": 10
+        },
+        "pair_whitelist": [],
+        "pair_blacklist": [
+            ".*DOWN/BTC",
+            ".*UP/BTC",
+            ".*DOWN/ETH",
+            ".*UP/ETH",
+            ".*DOWN/USDT",
+            ".*UP/USDT",
+            "USDC/.*",
+            "BUSD/.*",
+            "DAI/.*",
+            "TUSD/.*",
+            "USDT/.*",
+            "LIT/.*"
+        ]
+    },
+    "pairlists": [
+        {
+            "method": "VolumePairList",
+            "number_assets": 140,
+            "sort_key": "quoteVolume"
+        },
+        {
+            "method": "AgeFilter",
+            "min_days_listed": 30
+        }
+    ],
+    "api_server": {
+        "enabled": true,
+        "listen_ip_address": "127.0.0.1",
+        "listen_port": 8081,
+        "verbosity": "error",
+        "enable_openapi": true,
+        "jwt_secret_key": "somethingrandom",
+        "username": "freqtrader",
+        "password": "password",
+        "CORS_origins": [
+            "http://127.0.0.1:8081",
+            "http://localhost:8081"
+        ],
+        "api_keys": [
+            {
+                "key": "NASOS-12345-ABCDE",
+                "secret": "supersecret123nasos",
+                "permissions": [
+                    "status",
+                    "view",
+                    "trade",
+                    "control"
+                ]
+            }
+        ]
+    },
+    "db_url": "sqlite:///trades3NASOSv4_bot.sqlite",
+    "database": {
+        "engine": "SQLite",
+        "pool_size": 20,
+        "max_overflow": 40,
+        "pool_timeout": 60,
+        "pool_recycle": 3600,
+        "pool_pre_ping": true
+    },
+    "order_types": {
+        "buy": "limit",
+        "sell": "market",
+        "trailing_stop_loss": "market",
+        "stoploss": "limit",
+        "stoploss_on_exchange": false
+    },
+    "bid_strategy": {
+        "price_side": "ask",
+        "use_order_book": true,
+        "order_book_top": 1
+    },
+    "ask_strategy": {
+        "price_side": "bid",
+        "use_order_book": true,
+        "order_book_top": 1
+    }
+}
