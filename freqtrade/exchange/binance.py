@@ -1,7 +1,7 @@
 """Binance exchange subclass"""
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import ccxt
@@ -11,7 +11,11 @@ from freqtrade.constants import DEFAULT_DATAFRAME_COLUMNS
 from freqtrade.enums import CandleType, MarginMode, PriceType, TradingMode
 from freqtrade.exceptions import DDosProtection, OperationalException, TemporaryError
 from freqtrade.exchange import Exchange
-from freqtrade.exchange.binance_public_data import concat_safe, download_archive_ohlcv
+from freqtrade.exchange.binance_public_data import (
+    concat_safe,
+    download_archive_ohlcv,
+    download_archive_trades,
+)
 from freqtrade.exchange.common import retrier
 from freqtrade.exchange.exchange_types import FtHas, Tickers
 from freqtrade.exchange.exchange_utils_timeframe import timeframe_to_msecs
@@ -28,19 +32,23 @@ class Binance(Exchange):
         "stop_price_param": "stopPrice",
         "stop_price_prop": "stopPrice",
         "stoploss_order_types": {"limit": "stop_loss_limit"},
+        "stoploss_blocks_assets": True,  # By default stoploss orders block assets
         "order_time_in_force": ["GTC", "FOK", "IOC", "PO"],
-        "ohlcv_candle_limit": 1000,
         "trades_pagination": "id",
         "trades_pagination_arg": "fromId",
         "trades_has_history": True,
+        "fetch_orders_limit_minutes": None,
         "l2_limit_range": [5, 10, 20, 50, 100, 500, 1000],
         "ws_enabled": True,
     }
     _ft_has_futures: FtHas = {
+        "funding_fee_candle_limit": 1000,
         "stoploss_order_types": {"limit": "stop", "market": "stop_market"},
+        "stoploss_blocks_assets": False,  # Stoploss orders do not block assets
         "order_time_in_force": ["GTC", "FOK", "IOC"],
         "tickers_have_price": False,
         "floor_leverage": True,
+        "fetch_orders_limit_minutes": 7 * 1440,  # "fetch_orders" is limited to 7 days
         "stop_price_type_field": "workingType",
         "order_props_in_contracts": ["amount", "cost", "filled", "remaining"],
         "stop_price_type_value_mapping": {
@@ -55,7 +63,7 @@ class Binance(Exchange):
     }
 
     _supported_trading_mode_margin_pairs: list[tuple[TradingMode, MarginMode]] = [
-        # TradingMode.SPOT always supported and not required in this list
+        (TradingMode.SPOT, MarginMode.NONE),
         # (TradingMode.MARGIN, MarginMode.CROSS),
         (TradingMode.FUTURES, MarginMode.CROSS),
         (TradingMode.FUTURES, MarginMode.ISOLATED),
@@ -68,7 +76,10 @@ class Binance(Exchange):
         :return: Proxy coin or stake currency
         """
         if self.margin_mode == MarginMode.CROSS:
-            return self._config.get("proxy_coin", self._config["stake_currency"])
+            return self._config.get(
+                "proxy_coin",
+                self._config["stake_currency"],
+            )  # type: ignore[return-value]
         return self._config["stake_currency"]
 
     def get_tickers(
@@ -139,16 +150,17 @@ class Binance(Exchange):
         Does not work for other exchanges, which don't return the earliest data when called with "0"
         :param candle_type: Any of the enum CandleType (must match trading mode!)
         """
-        if is_new_pair:
-            x = self.loop.run_until_complete(
-                self._async_get_candle_history(pair, timeframe, candle_type, 0)
-            )
+        if is_new_pair and candle_type in (CandleType.SPOT, CandleType.FUTURES, CandleType.MARK):
+            with self._loop_lock:
+                x = self.loop.run_until_complete(
+                    self._async_get_candle_history(pair, timeframe, candle_type, 0)
+                )
             if x and x[3] and x[3][0] and x[3][0][0] > since_ms:
                 # Set starting date to first available candle.
                 since_ms = x[3][0][0]
                 logger.info(
                     f"Candle-data for {pair} available starting with "
-                    f"{datetime.fromtimestamp(since_ms // 1000, tz=timezone.utc).isoformat()}."
+                    f"{datetime.fromtimestamp(since_ms // 1000, tz=UTC).isoformat()}."
                 )
                 if until_ms and since_ms >= until_ms:
                     logger.warning(
@@ -201,16 +213,17 @@ class Binance(Exchange):
         """
         Fastly fetch OHLCV data by leveraging https://data.binance.vision.
         """
-        df = self.loop.run_until_complete(
-            download_archive_ohlcv(
-                candle_type=candle_type,
-                pair=pair,
-                timeframe=timeframe,
-                since_ms=since_ms,
-                until_ms=until_ms,
-                markets=self.markets,
+        with self._loop_lock:
+            df = self.loop.run_until_complete(
+                download_archive_ohlcv(
+                    candle_type=candle_type,
+                    pair=pair,
+                    timeframe=timeframe,
+                    since_ms=since_ms,
+                    until_ms=until_ms,
+                    markets=self.markets,
+                )
             )
-        )
 
         # download the remaining data from rest API
         if df.empty:
@@ -268,12 +281,12 @@ class Binance(Exchange):
     def dry_run_liquidation_price(
         self,
         pair: str,
-        open_rate: float,  # Entry price of position
+        open_rate: float,
         is_short: bool,
         amount: float,
         stake_amount: float,
         leverage: float,
-        wallet_balance: float,  # Or margin balance
+        wallet_balance: float,
         open_trades: list,
     ) -> float | None:
         """
@@ -287,8 +300,6 @@ class Binance(Exchange):
         :param amount: Absolute value of position size incl. leverage (in base currency)
         :param stake_amount: Stake amount - Collateral in settle currency.
         :param leverage: Leverage used for this position.
-        :param trading_mode: SPOT, MARGIN, FUTURES, etc.
-        :param margin_mode: Either ISOLATED or CROSS
         :param wallet_balance: Amount of margin_mode in the wallet being used to trade
             Cross-Margin Mode: crossWalletBalance
             Isolated-Margin Mode: isolatedWalletBalance
@@ -363,7 +374,7 @@ class Binance(Exchange):
             return {}
 
     async def _async_get_trade_history_id_startup(
-        self, pair: str, since: int | None
+        self, pair: str, since: int
     ) -> tuple[list[list], str]:
         """
         override for initial call
@@ -377,3 +388,48 @@ class Binance(Exchange):
         if not t:
             return [], "0"
         return t, from_id
+
+    async def _async_get_trade_history_id(
+        self, pair: str, until: int, since: int, from_id: str | None = None
+    ) -> tuple[str, list[list]]:
+        logger.info(f"Fetching trades from Binance, {from_id=}, {since=}, {until=}")
+
+        if not self._config["exchange"].get("only_from_ccxt", False):
+            if from_id is None or not since:
+                trades = await self._api_async.fetch_trades(
+                    pair,
+                    params={
+                        self._ft_has["trades_pagination_arg"]: "0",
+                    },
+                    limit=5,
+                )
+                listing_date: int = trades[0]["timestamp"]
+                since = max(since, listing_date)
+
+            _, res = await download_archive_trades(
+                CandleType.FUTURES if self.trading_mode == "futures" else CandleType.SPOT,
+                pair,
+                since_ms=since,
+                until_ms=until,
+                markets=self.markets,
+            )
+
+            if not res:
+                end_time = since
+                end_id = from_id
+            else:
+                end_time = res[-1][0]
+                end_id = res[-1][1]
+
+            if end_time and end_time >= until:
+                return pair, res
+            else:
+                _, res2 = await super()._async_get_trade_history_id(
+                    pair, until=until, since=end_time, from_id=end_id
+                )
+                res.extend(res2)
+                return pair, res
+
+        return await super()._async_get_trade_history_id(
+            pair, until=until, since=since, from_id=from_id
+        )

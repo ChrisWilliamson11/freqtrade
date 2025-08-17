@@ -1,14 +1,16 @@
 import logging
 from copy import deepcopy
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.exceptions import HTTPException
 
 from freqtrade import __version__
 from freqtrade.data.history import get_datahandler
-from freqtrade.enums import CandleType, State, TradingMode
+from freqtrade.enums import CandleType, RunMode, State, TradingMode
 from freqtrade.exceptions import OperationalException
 from freqtrade.rpc import RPC
+from freqtrade.rpc.api_server.api_pairlists import handleExchangePayload
 from freqtrade.rpc.api_server.api_schemas import (
     AvailablePairs,
     Balances,
@@ -27,18 +29,21 @@ from freqtrade.rpc.api_server.api_schemas import (
     FreqAIModelListResponse,
     Health,
     HyperoptLossListResponse,
+    ListCustomData,
     Locks,
     LocksPayload,
     Logs,
+    MarketRequest,
+    MarketResponse,
     MixTag,
     OpenTradeSchema,
     PairCandlesRequest,
     PairHistory,
-    PairHistoryRequest,
     PerformanceEntry,
     Ping,
     PlotConfig,
     Profit,
+    ProfitAll,
     ResultMsg,
     ShowConfig,
     Stats,
@@ -84,7 +89,9 @@ logger = logging.getLogger(__name__)
 # 2.35: pair_candles and pair_history endpoints as Post variant
 # 2.40: Add hyperopt-loss endpoint
 # 2.41: Add download-data endpoint
-API_VERSION = 2.41
+# 2.42: Add /pair_history endpoint with live data
+# 2.43: Add /profit_all endpoint
+API_VERSION = 2.43
 
 # Public API, requires no auth.
 router_public = APIRouter()
@@ -143,27 +150,57 @@ def profit(rpc: RPC = Depends(get_rpc), config=Depends(get_config)):
     return rpc._rpc_trade_statistics(config["stake_currency"], config.get("fiat_display_currency"))
 
 
+@router.get("/profit_all", response_model=ProfitAll, tags=["info"])
+def profit_all(rpc: RPC = Depends(get_rpc), config=Depends(get_config)):
+    response = {
+        "all": rpc._rpc_trade_statistics(
+            config["stake_currency"], config.get("fiat_display_currency")
+        ),
+    }
+    if config.get("trading_mode", TradingMode.SPOT) != TradingMode.SPOT:
+        response["long"] = rpc._rpc_trade_statistics(
+            config["stake_currency"], config.get("fiat_display_currency"), direction="long"
+        )
+        response["short"] = rpc._rpc_trade_statistics(
+            config["stake_currency"], config.get("fiat_display_currency"), direction="short"
+        )
+
+    return response
+
+
 @router.get("/stats", response_model=Stats, tags=["info"])
 def stats(rpc: RPC = Depends(get_rpc)):
     return rpc._rpc_stats()
 
 
 @router.get("/daily", response_model=DailyWeeklyMonthly, tags=["info"])
-def daily(timescale: int = 7, rpc: RPC = Depends(get_rpc), config=Depends(get_config)):
+def daily(
+    timescale: int = Query(7, ge=1, description="Number of days to fetch data for"),
+    rpc: RPC = Depends(get_rpc),
+    config=Depends(get_config),
+):
     return rpc._rpc_timeunit_profit(
         timescale, config["stake_currency"], config.get("fiat_display_currency", "")
     )
 
 
 @router.get("/weekly", response_model=DailyWeeklyMonthly, tags=["info"])
-def weekly(timescale: int = 4, rpc: RPC = Depends(get_rpc), config=Depends(get_config)):
+def weekly(
+    timescale: int = Query(4, ge=1, description="Number of weeks to fetch data for"),
+    rpc: RPC = Depends(get_rpc),
+    config=Depends(get_config),
+):
     return rpc._rpc_timeunit_profit(
         timescale, config["stake_currency"], config.get("fiat_display_currency", ""), "weeks"
     )
 
 
 @router.get("/monthly", response_model=DailyWeeklyMonthly, tags=["info"])
-def monthly(timescale: int = 3, rpc: RPC = Depends(get_rpc), config=Depends(get_config)):
+def monthly(
+    timescale: int = Query(3, ge=1, description="Number of months to fetch data for"),
+    rpc: RPC = Depends(get_rpc),
+    config=Depends(get_config),
+):
     return rpc._rpc_timeunit_profit(
         timescale, config["stake_currency"], config.get("fiat_display_currency", ""), "months"
     )
@@ -180,8 +217,15 @@ def status(rpc: RPC = Depends(get_rpc)):
 # Using the responsemodel here will cause a ~100% increase in response time (from 1s to 2s)
 # on big databases. Correct response model: response_model=TradeResponse,
 @router.get("/trades", tags=["info", "trading"])
-def trades(limit: int = 500, offset: int = 0, rpc: RPC = Depends(get_rpc)):
-    return rpc._rpc_trade_history(limit, offset=offset, order_by_id=True)
+def trades(
+    limit: int = Query(500, ge=1, description="Maximum number of different trades to return data"),
+    offset: int = Query(0, ge=0, description="Number of trades to skip for pagination"),
+    order_by_id: bool = Query(
+        True, description="Sort trades by id (default: True). If False, sorts by latest timestamp"
+    ),
+    rpc: RPC = Depends(get_rpc),
+):
+    return rpc._rpc_trade_history(limit, offset=offset, order_by_id=order_by_id)
 
 
 @router.get("/trade/{tradeid}", response_model=OpenTradeSchema, tags=["info", "trading"])
@@ -209,10 +253,34 @@ def trade_reload(tradeid: int, rpc: RPC = Depends(get_rpc)):
     return rpc._rpc_trade_status([tradeid])[0]
 
 
-# TODO: Missing response model
-@router.get("/edge", tags=["info"])
-def edge(rpc: RPC = Depends(get_rpc)):
-    return rpc._rpc_edge()
+@router.get("/trades/open/custom-data", response_model=list[ListCustomData], tags=["trading"])
+def list_open_trades_custom_data(
+    key: str | None = Query(None, description="Optional key to filter data"),
+    limit: int = Query(100, ge=1, description="Maximum number of different trades to return data"),
+    offset: int = Query(0, ge=0, description="Number of trades to skip for pagination"),
+    rpc: RPC = Depends(get_rpc),
+):
+    """
+    Fetch custom data for all open trades.
+    If a key is provided, it will be used to filter data accordingly.
+    Pagination is implemented via the `limit` and `offset` parameters.
+    """
+    try:
+        return rpc._rpc_list_custom_data(key=key, limit=limit, offset=offset)
+    except RPCException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/trades/{trade_id}/custom-data", response_model=list[ListCustomData], tags=["trading"])
+def list_custom_data(trade_id: int, key: str | None = Query(None), rpc: RPC = Depends(get_rpc)):
+    """
+    Fetch custom data for a specific trade.
+    If a key is provided, it will be used to filter data accordingly.
+    """
+    try:
+        return rpc._rpc_list_custom_data(trade_id, key=key)
+    except RPCException as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.get("/show_config", response_model=ShowConfig, tags=["info"])
@@ -318,10 +386,11 @@ def stop(rpc: RPC = Depends(get_rpc)):
     return rpc._rpc_stop()
 
 
+@router.post("/pause", response_model=StatusMsg, tags=["botcontrol"])
 @router.post("/stopentry", response_model=StatusMsg, tags=["botcontrol"])
 @router.post("/stopbuy", response_model=StatusMsg, tags=["botcontrol"])
-def stop_buy(rpc: RPC = Depends(get_rpc)):
-    return rpc._rpc_stopentry()
+def pause(rpc: RPC = Depends(get_rpc)):
+    return rpc._rpc_pause()
 
 
 @router.post("/reload_config", response_model=StatusMsg, tags=["botcontrol"])
@@ -340,58 +409,6 @@ def pair_candles_filtered(payload: PairCandlesRequest, rpc: RPC = Depends(get_rp
     return rpc._rpc_analysed_dataframe(
         payload.pair, payload.timeframe, payload.limit, payload.columns
     )
-
-
-@router.get("/pair_history", response_model=PairHistory, tags=["candle data"])
-def pair_history(
-    pair: str,
-    timeframe: str,
-    timerange: str,
-    strategy: str,
-    freqaimodel: str | None = None,
-    config=Depends(get_config),
-    exchange=Depends(get_exchange),
-):
-    # The initial call to this endpoint can be slow, as it may need to initialize
-    # the exchange class.
-    config = deepcopy(config)
-    config.update(
-        {
-            "timeframe": timeframe,
-            "strategy": strategy,
-            "timerange": timerange,
-            "freqaimodel": freqaimodel if freqaimodel else config.get("freqaimodel"),
-        }
-    )
-    try:
-        return RPC._rpc_analysed_history_full(config, pair, timeframe, exchange, None)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
-
-
-@router.post("/pair_history", response_model=PairHistory, tags=["candle data"])
-def pair_history_filtered(
-    payload: PairHistoryRequest, config=Depends(get_config), exchange=Depends(get_exchange)
-):
-    # The initial call to this endpoint can be slow, as it may need to initialize
-    # the exchange class.
-    config = deepcopy(config)
-    config.update(
-        {
-            "timeframe": payload.timeframe,
-            "strategy": payload.strategy,
-            "timerange": payload.timerange,
-            "freqaimodel": (
-                payload.freqaimodel if payload.freqaimodel else config.get("freqaimodel")
-            ),
-        }
-    )
-    try:
-        return RPC._rpc_analysed_history_full(
-            config, payload.pair, payload.timeframe, exchange, payload.columns
-        )
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
 
 
 @router.get("/plot_config", response_model=PlotConfig, tags=["candle data"])
@@ -523,6 +540,29 @@ def list_available_pairs(
         "pair_interval": pair_interval,
     }
     return result
+
+
+@router.get("/markets", response_model=MarketResponse, tags=["candle data", "webserver"])
+def markets(
+    query: Annotated[MarketRequest, Query()],
+    config=Depends(get_config),
+    rpc: RPC | None = Depends(get_rpc_optional),
+):
+    if not rpc or config["runmode"] == RunMode.WEBSERVER:
+        # webserver mode
+        config_loc = deepcopy(config)
+        handleExchangePayload(query, config_loc)
+        exchange = get_exchange(config_loc)
+    else:
+        exchange = rpc._freqtrade.exchange
+
+    return {
+        "markets": exchange.get_markets(
+            base_currencies=[query.base] if query.base else None,
+            quote_currencies=[query.quote] if query.quote else None,
+        ),
+        "exchange_id": exchange.id,
+    }
 
 
 @router.get("/sysinfo", response_model=SysInfo, tags=["info"])

@@ -1,7 +1,7 @@
 import copy
 import logging
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from random import randint
 from unittest.mock import MagicMock, Mock, PropertyMock, patch
 
@@ -35,7 +35,6 @@ from freqtrade.exchange.common import (
     API_FETCH_ORDER_RETRY_COUNT,
     API_RETRY_COUNT,
     calculate_backoff,
-    remove_exchange_credentials,
 )
 from freqtrade.resolvers.exchange_resolver import ExchangeResolver
 from freqtrade.util import dt_now, dt_ts
@@ -165,20 +164,6 @@ def test_init(default_conf, mocker, caplog):
     caplog.set_level(logging.INFO)
     get_patched_exchange(mocker, default_conf)
     assert log_has("Instance is running with dry_run enabled", caplog)
-
-
-def test_remove_exchange_credentials(default_conf) -> None:
-    conf = deepcopy(default_conf)
-    remove_exchange_credentials(conf["exchange"], False)
-
-    assert conf["exchange"]["key"] != ""
-    assert conf["exchange"]["secret"] != ""
-
-    remove_exchange_credentials(conf["exchange"], True)
-    assert conf["exchange"]["key"] == ""
-    assert conf["exchange"]["secret"] == ""
-    assert conf["exchange"]["password"] == ""
-    assert conf["exchange"]["uid"] == ""
 
 
 def test_init_ccxt_kwargs(default_conf, mocker, caplog):
@@ -590,7 +575,8 @@ def test__load_markets(default_conf, mocker, caplog):
 
     expected_return = {"ETH/BTC": "available"}
     api_mock = MagicMock()
-    api_mock.load_markets = get_mock_coro(return_value=expected_return)
+    api_mock.load_markets = get_mock_coro()
+    api_mock.markets = expected_return
     mocker.patch(f"{EXMS}._init_ccxt", MagicMock(return_value=api_mock))
     default_conf["exchange"]["pair_whitelist"] = ["ETH/BTC"]
     ex = Exchange(default_conf)
@@ -606,6 +592,7 @@ def test_reload_markets(default_conf, mocker, caplog, time_machine):
     time_machine.move_to(start_dt, tick=False)
     api_mock = MagicMock()
     api_mock.load_markets = get_mock_coro(return_value=initial_markets)
+    api_mock.markets = initial_markets
     default_conf["exchange"]["markets_refresh_interval"] = 10
     exchange = get_patched_exchange(
         mocker, default_conf, api_mock, exchange="binance", mock_markets=False
@@ -624,6 +611,7 @@ def test_reload_markets(default_conf, mocker, caplog, time_machine):
     api_mock.load_markets = get_mock_coro(return_value=updated_markets)
     # more than 10 minutes have passed, reload is executed
     time_machine.move_to(start_dt + timedelta(minutes=11), tick=False)
+    api_mock.markets = updated_markets
     exchange.reload_markets()
     assert exchange.markets == updated_markets
     assert lam_spy.call_count == 1
@@ -645,7 +633,7 @@ def test_reload_markets(default_conf, mocker, caplog, time_machine):
     # Tried once, failed
 
     lam_spy.reset_mock()
-    # When forceing (bot startup), it should retry 3 times.
+    # When forcing (bot startup), it should retry 3 times.
     exchange.reload_markets(force=True)
     assert lam_spy.call_count == 4
     assert exchange.markets == updated_markets
@@ -669,34 +657,33 @@ def test_reload_markets_exception(default_conf, mocker, caplog):
 
 
 @pytest.mark.parametrize("stake_currency", ["ETH", "BTC", "USDT"])
-def test_validate_stakecurrency(default_conf, stake_currency, mocker, caplog):
+def test_validate_stakecurrency(default_conf, stake_currency, mocker):
     default_conf["stake_currency"] = stake_currency
     api_mock = MagicMock()
-    type(api_mock).load_markets = get_mock_coro(
-        return_value={
-            "ETH/BTC": {"quote": "BTC"},
-            "LTC/BTC": {"quote": "BTC"},
-            "XRP/ETH": {"quote": "ETH"},
-            "NEO/USDT": {"quote": "USDT"},
-        }
-    )
+    api_mock.load_markets = get_mock_coro()
+    api_mock.markets = {
+        "ETH/BTC": {"quote": "BTC"},
+        "LTC/BTC": {"quote": "BTC"},
+        "XRP/ETH": {"quote": "ETH"},
+        "NEO/USDT": {"quote": "USDT"},
+    }
     mocker.patch(f"{EXMS}._init_ccxt", MagicMock(return_value=api_mock))
     mocker.patch(f"{EXMS}.validate_timeframes")
     mocker.patch(f"{EXMS}.validate_pricing")
     Exchange(default_conf)
 
 
-def test_validate_stakecurrency_error(default_conf, mocker, caplog):
+def test_validate_stakecurrency_error(default_conf, mocker):
     default_conf["stake_currency"] = "XRP"
     api_mock = MagicMock()
-    type(api_mock).load_markets = get_mock_coro(
-        return_value={
-            "ETH/BTC": {"quote": "BTC"},
-            "LTC/BTC": {"quote": "BTC"},
-            "XRP/ETH": {"quote": "ETH"},
-            "NEO/USDT": {"quote": "USDT"},
-        }
-    )
+    api_mock.load_markets = get_mock_coro()
+    api_mock.markets = {
+        "ETH/BTC": {"quote": "BTC"},
+        "LTC/BTC": {"quote": "BTC"},
+        "XRP/ETH": {"quote": "ETH"},
+        "NEO/USDT": {"quote": "USDT"},
+    }
+
     mocker.patch(f"{EXMS}._init_ccxt", MagicMock(return_value=api_mock))
     mocker.patch(f"{EXMS}.validate_timeframes")
     with pytest.raises(
@@ -705,7 +692,7 @@ def test_validate_stakecurrency_error(default_conf, mocker, caplog):
     ):
         Exchange(default_conf)
 
-    type(api_mock).load_markets = get_mock_coro(side_effect=ccxt.NetworkError("No connection."))
+    api_mock.load_markets = get_mock_coro(side_effect=ccxt.NetworkError("No connection."))
     mocker.patch(f"{EXMS}._init_ccxt", MagicMock(return_value=api_mock))
 
     with pytest.raises(
@@ -1260,7 +1247,7 @@ def test_create_dry_run_order_market_fill(
 @pytest.mark.parametrize("exchange_name", EXCHANGES)
 def test_create_order(default_conf, mocker, side, ordertype, rate, marketprice, exchange_name):
     api_mock = MagicMock()
-    order_id = f"test_prod_{side}_{randint(0, 10 ** 6)}"
+    order_id = f"test_prod_{side}_{randint(0, 10**6)}"
     api_mock.options = {} if not marketprice else {"createMarketBuyOrderRequiresPrice": True}
     api_mock.create_order = MagicMock(
         return_value={"id": order_id, "info": {"foo": "bar"}, "symbol": "XLTCUSDT", "amount": 1}
@@ -1339,7 +1326,7 @@ def test_buy_dry_run(default_conf, mocker, exchange_name):
 @pytest.mark.parametrize("exchange_name", EXCHANGES)
 def test_buy_prod(default_conf, mocker, exchange_name):
     api_mock = MagicMock()
-    order_id = f"test_prod_buy_{randint(0, 10 ** 6)}"
+    order_id = f"test_prod_buy_{randint(0, 10**6)}"
     order_type = "market"
     time_in_force = "gtc"
     api_mock.options = {}
@@ -1460,7 +1447,7 @@ def test_buy_prod(default_conf, mocker, exchange_name):
 @pytest.mark.parametrize("exchange_name", EXCHANGES)
 def test_buy_considers_time_in_force(default_conf, mocker, exchange_name):
     api_mock = MagicMock()
-    order_id = f"test_prod_buy_{randint(0, 10 ** 6)}"
+    order_id = f"test_prod_buy_{randint(0, 10**6)}"
     api_mock.options = {}
     api_mock.create_order = MagicMock(
         return_value={"id": order_id, "symbol": "ETH/BTC", "info": {"foo": "bar"}}
@@ -1537,7 +1524,7 @@ def test_sell_dry_run(default_conf, mocker):
 @pytest.mark.parametrize("exchange_name", EXCHANGES)
 def test_sell_prod(default_conf, mocker, exchange_name):
     api_mock = MagicMock()
-    order_id = f"test_prod_sell_{randint(0, 10 ** 6)}"
+    order_id = f"test_prod_sell_{randint(0, 10**6)}"
     order_type = "market"
     api_mock.options = {}
     api_mock.create_order = MagicMock(
@@ -1617,7 +1604,7 @@ def test_sell_prod(default_conf, mocker, exchange_name):
 @pytest.mark.parametrize("exchange_name", EXCHANGES)
 def test_sell_considers_time_in_force(default_conf, mocker, exchange_name):
     api_mock = MagicMock()
-    order_id = f"test_prod_sell_{randint(0, 10 ** 6)}"
+    order_id = f"test_prod_sell_{randint(0, 10**6)}"
     api_mock.create_order = MagicMock(
         return_value={"id": order_id, "symbol": "ETH/BTC", "info": {"foo": "bar"}}
     )
@@ -1726,17 +1713,22 @@ def test_fetch_positions(default_conf, mocker, exchange_name):
 @pytest.mark.parametrize("exchange_name", EXCHANGES)
 def test_fetch_orders(default_conf, mocker, exchange_name, limit_order):
     api_mock = MagicMock()
-    api_mock.fetch_orders = MagicMock(
-        return_value=[
-            limit_order["buy"],
-            limit_order["sell"],
+    call_count = 1
+
+    def return_value(*args, **kwargs):
+        nonlocal call_count
+        call_count += 2
+        return [
+            {**limit_order["buy"], "id": call_count},
+            {**limit_order["sell"], "id": call_count + 1},
         ]
-    )
+
+    api_mock.fetch_orders = MagicMock(side_effect=return_value)
     api_mock.fetch_open_orders = MagicMock(return_value=[limit_order["buy"]])
     api_mock.fetch_closed_orders = MagicMock(return_value=[limit_order["buy"]])
 
     mocker.patch(f"{EXMS}.exchange_has", return_value=True)
-    start_time = datetime.now(timezone.utc) - timedelta(days=20)
+    start_time = datetime.now(UTC) - timedelta(days=20)
     expected = 1
     if exchange_name == "bybit":
         expected = 3
@@ -2114,7 +2106,7 @@ def test___now_is_time_to_refresh(default_conf, mocker, exchange_name, time_mach
     exchange = get_patched_exchange(mocker, default_conf, exchange=exchange_name)
     pair = "BTC/USDT"
     candle_type = CandleType.SPOT
-    start_dt = datetime(2023, 12, 1, 0, 10, 0, tzinfo=timezone.utc)
+    start_dt = datetime(2023, 12, 1, 0, 10, 0, tzinfo=UTC)
     time_machine.move_to(start_dt, tick=False)
     assert (pair, "5m", candle_type) not in exchange._pairs_last_refresh_time
 
@@ -2135,6 +2127,21 @@ def test___now_is_time_to_refresh(default_conf, mocker, exchange_name, time_mach
     # 1 second later (last_refresh_time didn't change)
     time_machine.move_to(start_dt + timedelta(minutes=5, seconds=1), tick=False)
     assert exchange._now_is_time_to_refresh(pair, "5m", candle_type) is True
+
+    # Test with 1d data
+    start_day_dt = datetime(2023, 12, 1, 0, 0, 0, tzinfo=UTC)
+    last_closed_candle_1d = dt_ts(start_day_dt - timedelta(days=1))
+    exchange._pairs_last_refresh_time[(pair, "1d", candle_type)] = last_closed_candle_1d
+
+    time_machine.move_to(start_day_dt - timedelta(seconds=5), tick=False)
+    assert exchange._now_is_time_to_refresh(pair, "1d", candle_type) is False
+
+    time_machine.move_to(start_day_dt + timedelta(hours=20, seconds=5), tick=False)
+    assert exchange._now_is_time_to_refresh(pair, "1d", candle_type) is False
+
+    # Next candle closed - now we refresh.
+    time_machine.move_to(start_day_dt + timedelta(days=1, seconds=0), tick=False)
+    assert exchange._now_is_time_to_refresh(pair, "1d", candle_type) is True
 
 
 @pytest.mark.parametrize("candle_type", ["mark", ""])
@@ -2177,13 +2184,11 @@ def test_get_historic_ohlcv(default_conf, mocker, caplog, exchange_name, candle_
 
     caplog.clear()
 
-    async def mock_get_candle_hist_error(pair, *args, **kwargs):
-        raise TimeoutError()
-
-    exchange._async_get_candle_history = MagicMock(side_effect=mock_get_candle_hist_error)
-    ret = exchange.get_historic_ohlcv(
-        pair, "5m", dt_ts(dt_now() - timedelta(seconds=since)), candle_type=candle_type
-    )
+    exchange._async_get_candle_history = get_mock_coro(side_effect=TimeoutError())
+    with pytest.raises(TimeoutError):
+        exchange.get_historic_ohlcv(
+            pair, "5m", dt_ts(dt_now() - timedelta(seconds=since)), candle_type=candle_type
+        )
     assert log_has_re(r"Async code raised an exception: .*", caplog)
 
 
@@ -2192,7 +2197,7 @@ def test_get_historic_ohlcv(default_conf, mocker, caplog, exchange_name, candle_
 async def test__async_get_historic_ohlcv(default_conf, mocker, caplog, exchange_name, candle_type):
     ohlcv = [
         [
-            int((datetime.now(timezone.utc).timestamp() - 1000) * 1000),
+            int((datetime.now(UTC).timestamp() - 1000) * 1000),
             1,  # open
             2,  # high
             3,  # low
@@ -2373,6 +2378,8 @@ def test_refresh_latest_trades(
     caplog.set_level(logging.DEBUG)
     use_trades_conf = default_conf
     use_trades_conf["exchange"]["use_public_trades"] = True
+    use_trades_conf["exchange"]["only_from_ccxt"] = True
+
     use_trades_conf["datadir"] = tmp_path
     use_trades_conf["orderflow"] = {"max_candles": 1500}
     exchange = get_patched_exchange(mocker, use_trades_conf)
@@ -2494,11 +2501,13 @@ def test_refresh_latest_trades(
 
 @pytest.mark.parametrize("candle_type", [CandleType.FUTURES, CandleType.MARK, CandleType.SPOT])
 def test_refresh_latest_ohlcv_cache(mocker, default_conf, candle_type, time_machine) -> None:
-    start = datetime(2021, 8, 1, 0, 0, 0, 0, tzinfo=timezone.utc)
+    start = datetime(2021, 8, 1, 0, 0, 0, 0, tzinfo=UTC)
     ohlcv = generate_test_data_raw("1h", 100, start.strftime("%Y-%m-%d"))
     time_machine.move_to(start + timedelta(hours=99, minutes=30))
 
     exchange = get_patched_exchange(mocker, default_conf)
+    exchange._set_startup_candle_count(default_conf)
+
     mocker.patch(f"{EXMS}.ohlcv_candle_limit", return_value=100)
     assert exchange._startup_candle_count == 0
 
@@ -2588,7 +2597,7 @@ def test_refresh_latest_ohlcv_cache(mocker, default_conf, candle_type, time_mach
 
 
 def test_refresh_ohlcv_with_cache(mocker, default_conf, time_machine) -> None:
-    start = datetime(2021, 8, 1, 0, 0, 0, 0, tzinfo=timezone.utc)
+    start = datetime(2021, 8, 1, 0, 0, 0, 0, tzinfo=UTC)
     ohlcv = generate_test_data_raw("1h", 100, start.strftime("%Y-%m-%d"))
     time_machine.move_to(start, tick=False)
     pairs = [
@@ -2838,6 +2847,11 @@ def test_get_next_limit_in_list():
     assert Exchange.get_next_limit_in_list(21, None) == 21
     assert Exchange.get_next_limit_in_list(100, None) == 100
     assert Exchange.get_next_limit_in_list(1000, None) == 1000
+    # With upper limit
+    assert Exchange.get_next_limit_in_list(1000, None, upper_limit=None) == 1000
+    assert Exchange.get_next_limit_in_list(1000, None, upper_limit=500) == 500
+    # with upper limit and range, limit_range wins
+    assert Exchange.get_next_limit_in_list(1000, limit_range, upper_limit=500) == 1000
 
 
 @pytest.mark.parametrize("exchange_name", EXCHANGES)
@@ -2891,7 +2905,7 @@ def test_get_entry_rate(
     mocker, default_conf, caplog, side, ask, bid, last, last_ab, expected, time_machine
 ) -> None:
     caplog.set_level(logging.DEBUG)
-    start_dt = datetime(2023, 12, 1, 0, 10, 0, tzinfo=timezone.utc)
+    start_dt = datetime(2023, 12, 1, 0, 10, 0, tzinfo=UTC)
     time_machine.move_to(start_dt, tick=False)
     if last_ab is None:
         del default_conf["entry_pricing"]["price_last_balance"]
@@ -2928,7 +2942,7 @@ def test_get_exit_rate(
     default_conf, mocker, caplog, side, bid, ask, last, last_ab, expected, time_machine
 ) -> None:
     caplog.set_level(logging.DEBUG)
-    start_dt = datetime(2023, 12, 1, 0, 10, 0, tzinfo=timezone.utc)
+    start_dt = datetime(2023, 12, 1, 0, 10, 0, tzinfo=UTC)
     time_machine.move_to(start_dt, tick=False)
 
     default_conf["exit_pricing"]["price_side"] = side
@@ -3257,7 +3271,7 @@ async def test__async_fetch_trades(
     assert isinstance(res, list)
     assert isinstance(res[0], list)
     assert isinstance(res[1], list)
-    if exchange._trades_pagination == "id":
+    if exchange._ft_has["trades_pagination"] == "id":
         if exchange_name == "kraken":
             assert pagid == 1565798399872512133
         else:
@@ -3278,7 +3292,7 @@ async def test__async_fetch_trades(
     assert exchange._api_async.fetch_trades.call_args[1]["limit"] == 1000
     assert exchange._api_async.fetch_trades.call_args[1]["params"] == {"from": "123"}
 
-    if exchange._trades_pagination == "id":
+    if exchange._ft_has["trades_pagination"] == "id":
         if exchange_name == "kraken":
             assert pagid == 1565798399872512133
         else:
@@ -3365,11 +3379,12 @@ async def test__async_fetch_trades_contract_size(
 async def test__async_get_trade_history_id(
     default_conf, mocker, exchange_name, fetch_trades_result
 ):
+    default_conf["exchange"]["only_from_ccxt"] = True
     exchange = get_patched_exchange(mocker, default_conf, exchange=exchange_name)
-    if exchange._trades_pagination != "id":
+    if exchange._ft_has["trades_pagination"] != "id":
         exchange.close()
         pytest.skip("Exchange does not support pagination by trade id")
-    pagination_arg = exchange._trades_pagination_arg
+    pagination_arg = exchange._ft_has["trades_pagination_arg"]
 
     async def mock_get_trade_hist(pair, *args, **kwargs):
         if "since" in kwargs:
@@ -3443,7 +3458,7 @@ async def test__async_get_trade_history_time(
 
     caplog.set_level(logging.DEBUG)
     exchange = get_patched_exchange(mocker, default_conf, exchange=exchange_name)
-    if exchange._trades_pagination != "time":
+    if exchange._ft_has["trades_pagination"] != "time":
         exchange.close()
         pytest.skip("Exchange does not support pagination by timestamp")
     # Monkey-patch async function
@@ -4006,7 +4021,7 @@ def test_get_trades_for_order(default_conf, mocker, exchange_name, trading_mode,
     assert api_mock.fetch_my_trades.call_args[0][1] == 1525478395000
     assert (
         api_mock.fetch_my_trades.call_args[0][1]
-        == int(since.replace(tzinfo=timezone.utc).timestamp() - 5) * 1000
+        == int(since.replace(tzinfo=UTC).timestamp() - 5) * 1000
     )
 
     ccxt_exceptionhandlers(
@@ -4436,7 +4451,7 @@ def test_ohlcv_candle_limit(default_conf, mocker, exchange_name):
         pytest.skip("Tested separately for okx")
     exchange = get_patched_exchange(mocker, default_conf, exchange=exchange_name)
     timeframes = ("1m", "5m", "1h")
-    expected = exchange._ft_has["ohlcv_candle_limit"]
+    expected = exchange._ft_has.get("ohlcv_candle_limit", 500)
     for timeframe in timeframes:
         # if 'ohlcv_candle_limit_per_timeframe' in exchange._ft_has:
         # expected = exchange._ft_has['ohlcv_candle_limit_per_timeframe'][timeframe]
@@ -4772,7 +4787,7 @@ def test_calculate_backoff(retrycount, max_retries, expected):
 
 @pytest.mark.parametrize("exchange_name", EXCHANGES)
 def test_get_funding_fees(default_conf_usdt, mocker, exchange_name, caplog):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     default_conf_usdt["trading_mode"] = "futures"
     default_conf_usdt["margin_mode"] = "isolated"
     exchange = get_patched_exchange(mocker, default_conf_usdt, exchange=exchange_name)
@@ -4941,7 +4956,7 @@ def test_validate_trading_mode_and_margin_mode(
         ("binance", "margin", {"options": {"defaultType": "margin"}}),
         ("binance", "futures", {"options": {"defaultType": "swap"}}),
         ("bybit", "spot", {"options": {"defaultType": "spot"}}),
-        ("bybit", "futures", {"options": {"defaultType": "swap"}}),
+        ("bybit", "futures", {"options": {"defaultType": "swap", "defaultSettle": "USDT"}}),
         ("gate", "futures", {"options": {"defaultType": "swap"}}),
         ("hitbtc", "futures", {"options": {"defaultType": "swap"}}),
         ("kraken", "futures", {"options": {"defaultType": "swap"}}),
@@ -4949,10 +4964,10 @@ def test_validate_trading_mode_and_margin_mode(
         ("okx", "futures", {"options": {"defaultType": "swap"}}),
     ],
 )
-def test__ccxt_config(default_conf, mocker, exchange_name, trading_mode, ccxt_config):
-    default_conf["trading_mode"] = trading_mode
-    default_conf["margin_mode"] = "isolated"
-    exchange = get_patched_exchange(mocker, default_conf, exchange=exchange_name)
+def test__ccxt_config(default_conf_usdt, mocker, exchange_name, trading_mode, ccxt_config):
+    default_conf_usdt["trading_mode"] = trading_mode
+    default_conf_usdt["margin_mode"] = "isolated"
+    exchange = get_patched_exchange(mocker, default_conf_usdt, exchange=exchange_name)
     assert exchange._ccxt_config == ccxt_config
 
 
@@ -4989,8 +5004,8 @@ def test_calculate_funding_fees(
 ):
     exchange = get_patched_exchange(mocker, default_conf)
     kraken = get_patched_exchange(mocker, default_conf, exchange="kraken")
-    prior_date = timeframe_to_prev_date("1h", datetime.now(timezone.utc) - timedelta(hours=1))
-    trade_date = timeframe_to_prev_date("1h", datetime.now(timezone.utc))
+    prior_date = timeframe_to_prev_date("1h", datetime.now(UTC) - timedelta(hours=1))
+    trade_date = timeframe_to_prev_date("1h", datetime.now(UTC))
     funding_rates = DataFrame(
         [
             {"date": prior_date, "open": funding_rate},  # Line not used.
@@ -5059,9 +5074,9 @@ def test_combine_funding_and_mark(
     futures_funding_rate,
 ):
     exchange = get_patched_exchange(mocker, default_conf)
-    prior2_date = timeframe_to_prev_date("1h", datetime.now(timezone.utc) - timedelta(hours=2))
-    prior_date = timeframe_to_prev_date("1h", datetime.now(timezone.utc) - timedelta(hours=1))
-    trade_date = timeframe_to_prev_date("1h", datetime.now(timezone.utc))
+    prior2_date = timeframe_to_prev_date("1h", datetime.now(UTC) - timedelta(hours=2))
+    prior_date = timeframe_to_prev_date("1h", datetime.now(UTC) - timedelta(hours=1))
+    trade_date = timeframe_to_prev_date("1h", datetime.now(UTC))
     funding_rates = DataFrame(
         [
             {"date": prior2_date, "open": funding_rate},
@@ -5593,11 +5608,13 @@ def test_liquidation_price_is_none(
 def test_get_max_pair_stake_amount(
     mocker,
     default_conf,
+    leverage_tiers,
 ):
     api_mock = MagicMock()
     default_conf["margin_mode"] = "isolated"
     default_conf["trading_mode"] = "futures"
     exchange = get_patched_exchange(mocker, default_conf, api_mock)
+    exchange._leverage_tiers = leverage_tiers
     markets = {
         "XRP/USDT:USDT": {
             "limits": {
@@ -5661,11 +5678,23 @@ def test_get_max_pair_stake_amount(
             "contractSize": 0.01,
             "spot": False,
         },
+        "ZEC/USDT:USDT": {
+            "limits": {
+                "amount": {"min": 0.001, "max": None},
+                "cost": {"min": 5, "max": None},
+            },
+            "contractSize": 1,
+            "spot": False,
+        },
     }
 
     mocker.patch(f"{EXMS}.markets", markets)
     assert exchange.get_max_pair_stake_amount("XRP/USDT:USDT", 2.0) == 20000
     assert exchange.get_max_pair_stake_amount("XRP/USDT:USDT", 2.0, 5) == 4000
+    # limit leverage tiers
+    assert exchange.get_max_pair_stake_amount("ZEC/USDT:USDT", 2.0, 5) == 100_000
+    assert exchange.get_max_pair_stake_amount("ZEC/USDT:USDT", 2.0, 50) == 1000
+
     assert exchange.get_max_pair_stake_amount("LTC/USDT:USDT", 2.0) == float("inf")
     assert exchange.get_max_pair_stake_amount("ETH/USDT:USDT", 2.0) == 200
     assert exchange.get_max_pair_stake_amount("DOGE/USDT:USDT", 2.0) == 500
@@ -5896,17 +5925,21 @@ def test_get_max_leverage_futures(default_conf, mocker, leverage_tiers):
     assert exchange.get_max_leverage("XRP/USDT:USDT", 1.0) == 20.0
     assert exchange.get_max_leverage("BNB/USDT:USDT", 100.0) == 75.0
     assert exchange.get_max_leverage("BTC/USDT:USDT", 170.30) == 125.0
-    assert pytest.approx(exchange.get_max_leverage("XRP/USDT:USDT", 99999.9)) == 5.000005
-    assert pytest.approx(exchange.get_max_leverage("BNB/USDT:USDT", 1500)) == 33.333333333333333
+    assert pytest.approx(exchange.get_max_leverage("XRP/USDT:USDT", 99999.9)) == 5
+    assert pytest.approx(exchange.get_max_leverage("BNB/USDT:USDT", 1500)) == 25
     assert exchange.get_max_leverage("BTC/USDT:USDT", 300000000) == 2.0
     assert exchange.get_max_leverage("BTC/USDT:USDT", 600000000) == 1.0  # Last tier
 
     assert exchange.get_max_leverage("SPONGE/USDT:USDT", 200) == 1.0  # Pair not in leverage_tiers
     assert exchange.get_max_leverage("BTC/USDT:USDT", 0.0) == 125.0  # No stake amount
     with pytest.raises(
-        InvalidOrderException, match=r"Amount 1000000000.01 too high for BTC/USDT:USDT"
+        InvalidOrderException, match=r"Stake amount 1000000000.01 too high for BTC/USDT:USDT"
     ):
         exchange.get_max_leverage("BTC/USDT:USDT", 1000000000.01)
+
+    assert exchange.get_max_leverage("TIA/USDT:USDT", 130) == 50
+    assert exchange.get_max_leverage("TIA/USDT:USDT", 131) == 40
+    assert exchange.get_max_leverage("TIA/USDT:USDT", 130.008) == 40
 
 
 @pytest.mark.parametrize("exchange_name", ["binance", "kraken", "gate", "okx", "bybit"])
@@ -6076,44 +6109,47 @@ def test_get_liquidation_price1(mocker, default_conf):
 
 @pytest.mark.parametrize("liquidation_buffer", [0.0])
 @pytest.mark.parametrize(
-    "is_short,trading_mode,exchange_name,margin_mode,leverage,open_rate,amount,expected_liq",
+    "is_short,trading_mode,exchange_name,margin_mode,leverage,open_rate,amount,mramt,expected_liq",
     [
-        (False, "spot", "binance", "", 5.0, 10.0, 1.0, None),
-        (True, "spot", "binance", "", 5.0, 10.0, 1.0, None),
-        (False, "spot", "gate", "", 5.0, 10.0, 1.0, None),
-        (True, "spot", "gate", "", 5.0, 10.0, 1.0, None),
-        (False, "spot", "okx", "", 5.0, 10.0, 1.0, None),
-        (True, "spot", "okx", "", 5.0, 10.0, 1.0, None),
+        (False, "spot", "binance", "", 5.0, 10.0, 1.0, (0.01, 0.01), None),
+        (True, "spot", "binance", "", 5.0, 10.0, 1.0, (0.01, 0.01), None),
+        (False, "spot", "gate", "", 5.0, 10.0, 1.0, (0.01, 0.01), None),
+        (True, "spot", "gate", "", 5.0, 10.0, 1.0, (0.01, 0.01), None),
+        (False, "spot", "okx", "", 5.0, 10.0, 1.0, (0.01, 0.01), None),
+        (True, "spot", "okx", "", 5.0, 10.0, 1.0, (0.01, 0.01), None),
         # Binance, short
-        (True, "futures", "binance", "isolated", 5.0, 10.0, 1.0, 11.89108910891089),
-        (True, "futures", "binance", "isolated", 3.0, 10.0, 1.0, 13.211221122079207),
-        (True, "futures", "binance", "isolated", 5.0, 8.0, 1.0, 9.514851485148514),
-        (True, "futures", "binance", "isolated", 5.0, 10.0, 0.6, 11.897689768976898),
+        (True, "futures", "binance", "isolated", 5.0, 10.0, 1.0, (0.01, 0.01), 11.89108910891089),
+        (True, "futures", "binance", "isolated", 3.0, 10.0, 1.0, (0.01, 0.01), 13.211221122079207),
+        (True, "futures", "binance", "isolated", 5.0, 8.0, 1.0, (0.01, 0.01), 9.514851485148514),
+        (True, "futures", "binance", "isolated", 5.0, 10.0, 0.6, (0.01, 0.01), 11.897689768976898),
         # Binance, long
-        (False, "futures", "binance", "isolated", 5, 10, 1.0, 8.070707070707071),
-        (False, "futures", "binance", "isolated", 5, 8, 1.0, 6.454545454545454),
-        (False, "futures", "binance", "isolated", 3, 10, 1.0, 6.723905723905723),
-        (False, "futures", "binance", "isolated", 5, 10, 0.6, 8.063973063973064),
+        (False, "futures", "binance", "isolated", 5, 10, 1.0, (0.01, 0.01), 8.070707070707071),
+        (False, "futures", "binance", "isolated", 5, 8, 1.0, (0.01, 0.01), 6.454545454545454),
+        (False, "futures", "binance", "isolated", 3, 10, 1.0, (0.01, 0.01), 6.723905723905723),
+        (False, "futures", "binance", "isolated", 5, 10, 0.6, (0.01, 0.01), 8.063973063973064),
         # Gate/okx, short
-        (True, "futures", "gate", "isolated", 5, 10, 1.0, 11.87413417771621),
-        (True, "futures", "gate", "isolated", 5, 10, 2.0, 11.87413417771621),
-        (True, "futures", "gate", "isolated", 3, 10, 1.0, 13.193482419684678),
-        (True, "futures", "gate", "isolated", 5, 8, 1.0, 9.499307342172967),
-        (True, "futures", "okx", "isolated", 3, 10, 1.0, 13.193482419684678),
+        (True, "futures", "gate", "isolated", 5, 10, 1.0, (0.01, 0.01), 11.87413417771621),
+        (True, "futures", "gate", "isolated", 5, 10, 2.0, (0.01, 0.01), 11.87413417771621),
+        (True, "futures", "gate", "isolated", 3, 10, 1.0, (0.01, 0.01), 13.193482419684678),
+        (True, "futures", "gate", "isolated", 5, 8, 1.0, (0.01, 0.01), 9.499307342172967),
+        (True, "futures", "okx", "isolated", 3, 10, 1.0, (0.01, 0.01), 13.193482419684678),
         # Gate/okx, long
-        (False, "futures", "gate", "isolated", 5.0, 10.0, 1.0, 8.085708510208207),
-        (False, "futures", "gate", "isolated", 3.0, 10.0, 1.0, 6.738090425173506),
-        (False, "futures", "okx", "isolated", 3.0, 10.0, 1.0, 6.738090425173506),
+        (False, "futures", "gate", "isolated", 5.0, 10.0, 1.0, (0.01, 0.01), 8.085708510208207),
+        (False, "futures", "gate", "isolated", 3.0, 10.0, 1.0, (0.01, 0.01), 6.738090425173506),
+        (False, "futures", "okx", "isolated", 3.0, 10.0, 1.0, (0.01, 0.01), 6.738090425173506),
         # bybit, long
-        (False, "futures", "bybit", "isolated", 1.0, 10.0, 1.0, 0.1),
-        (False, "futures", "bybit", "isolated", 3.0, 10.0, 1.0, 6.7666666),
-        (False, "futures", "bybit", "isolated", 5.0, 10.0, 1.0, 8.1),
-        (False, "futures", "bybit", "isolated", 10.0, 10.0, 1.0, 9.1),
+        (False, "futures", "bybit", "isolated", 1.0, 10.0, 1.0, (0.01, 0.01), 0.1),
+        (False, "futures", "bybit", "isolated", 3.0, 10.0, 1.0, (0.01, 0.01), 6.7666666),
+        (False, "futures", "bybit", "isolated", 5.0, 10.0, 1.0, (0.01, 0.01), 8.1),
+        (False, "futures", "bybit", "isolated", 10.0, 10.0, 1.0, (0.01, 0.01), 9.1),
+        # From the bybit example - without additional margin
+        (False, "futures", "bybit", "isolated", 50.0, 40000.0, 1.0, (0.005, None), 39400),
+        (False, "futures", "bybit", "isolated", 50.0, 20000.0, 1.0, (0.005, None), 19700),
         # bybit, short
-        (True, "futures", "bybit", "isolated", 1.0, 10.0, 1.0, 19.9),
-        (True, "futures", "bybit", "isolated", 3.0, 10.0, 1.0, 13.233333),
-        (True, "futures", "bybit", "isolated", 5.0, 10.0, 1.0, 11.9),
-        (True, "futures", "bybit", "isolated", 10.0, 10.0, 1.0, 10.9),
+        (True, "futures", "bybit", "isolated", 1.0, 10.0, 1.0, (0.01, 0.01), 19.9),
+        (True, "futures", "bybit", "isolated", 3.0, 10.0, 1.0, (0.01, 0.01), 13.233333),
+        (True, "futures", "bybit", "isolated", 5.0, 10.0, 1.0, (0.01, 0.01), 11.9),
+        (True, "futures", "bybit", "isolated", 10.0, 10.0, 1.0, (0.01, 0.01), 10.9),
     ],
 )
 def test_get_liquidation_price(
@@ -6126,6 +6162,7 @@ def test_get_liquidation_price(
     leverage,
     open_rate,
     amount,
+    mramt,
     expected_liq,
     liquidation_buffer,
 ):
@@ -6189,7 +6226,7 @@ def test_get_liquidation_price(
     mocker.patch(f"{EXMS}.price_to_precision", lambda s, x, y, **kwargs: y)
     exchange = get_patched_exchange(mocker, default_conf_usdt, exchange=exchange_name)
 
-    exchange.get_maintenance_ratio_and_amt = MagicMock(return_value=(0.01, 0.01))
+    exchange.get_maintenance_ratio_and_amt = MagicMock(return_value=mramt)
     exchange.name = exchange_name
     # default_conf_usdt.update({
     #     "dry_run": False,
@@ -6221,7 +6258,7 @@ def test_get_liquidation_price(
 )
 def test_stoploss_contract_size(mocker, default_conf, contract_size, order_amount):
     api_mock = MagicMock()
-    order_id = f"test_prod_buy_{randint(0, 10 ** 6)}"
+    order_id = f"test_prod_buy_{randint(0, 10**6)}"
 
     api_mock.create_order = MagicMock(
         return_value={
@@ -6259,3 +6296,26 @@ def test_price_to_precision_with_default_conf(default_conf, mocker):
     prec_price = patched_ex.price_to_precision("XRP/USDT", 1.0000000101)
     assert prec_price == 1.00000001
     assert prec_price == 1.00000001
+
+
+def test_exchange_features(default_conf, mocker):
+    conf = copy.deepcopy(default_conf)
+    exchange = get_patched_exchange(mocker, conf)
+    exchange._api_async.features = {
+        "spot": {
+            "fetchOHLCV": {
+                "limit": 995,
+            }
+        },
+        "swap": {
+            "linear": {
+                "fetchOHLCV": {
+                    "limit": 997,
+                }
+            }
+        },
+    }
+    assert exchange.features("spot", "fetchOHLCV", "limit", 500) == 995
+    assert exchange.features("futures", "fetchOHLCV", "limit", 500) == 997
+    # Fall back to default
+    assert exchange.features("futures", "fetchOHLCV_else", "limit", 601) == 601

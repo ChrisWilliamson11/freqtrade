@@ -5,7 +5,7 @@ import re
 import shutil
 import threading
 import warnings
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -32,6 +32,8 @@ FEATURE_PIPELINE = "feature_pipeline"
 LABEL_PIPELINE = "label_pipeline"
 TRAINDF = "trained_df"
 METADATA = "metadata"
+
+METADATA_NUMBER_MODE = rapidjson.NM_NATIVE | rapidjson.NM_NAN
 
 
 class pair_info(TypedDict):
@@ -114,7 +116,7 @@ class FreqaiDataDrawer:
             if metric not in self.metric_tracker[pair]:
                 self.metric_tracker[pair][metric] = {"timestamp": [], "value": []}
 
-            timestamp = int(datetime.now(timezone.utc).timestamp())
+            timestamp = int(datetime.now(UTC).timestamp())
             self.metric_tracker[pair][metric]["value"].append(value)
             self.metric_tracker[pair][metric]["timestamp"].append(timestamp)
 
@@ -491,11 +493,11 @@ class FreqaiDataDrawer:
 
         dk.data["data_path"] = str(dk.data_path)
         dk.data["model_filename"] = str(dk.model_filename)
-        dk.data["training_features_list"] = list(dk.data_dictionary["train_features"].columns)
+        dk.data["training_features_list"] = dk.training_features_list
         dk.data["label_list"] = dk.label_list
 
         with (save_path / f"{dk.model_filename}_{METADATA}.json").open("w") as fp:
-            rapidjson.dump(dk.data, fp, default=self.np_encoder, number_mode=rapidjson.NM_NATIVE)
+            rapidjson.dump(dk.data, fp, default=self.np_encoder, number_mode=METADATA_NUMBER_MODE)
 
         return
 
@@ -526,7 +528,7 @@ class FreqaiDataDrawer:
         dk.data["label_list"] = dk.label_list
         # store the metadata
         with (save_path / f"{dk.model_filename}_{METADATA}.json").open("w") as fp:
-            rapidjson.dump(dk.data, fp, default=self.np_encoder, number_mode=rapidjson.NM_NATIVE)
+            rapidjson.dump(dk.data, fp, default=self.np_encoder, number_mode=METADATA_NUMBER_MODE)
 
         # save the pipelines to pickle files
         with (save_path / f"{dk.model_filename}_{FEATURE_PIPELINE}.pkl").open("wb") as fp:
@@ -563,11 +565,11 @@ class FreqaiDataDrawer:
         presaved backtesting (prediction file loading).
         """
         with (dk.data_path / f"{dk.model_filename}_{METADATA}.json").open("r") as fp:
-            dk.data = rapidjson.load(fp, number_mode=rapidjson.NM_NATIVE)
+            dk.data = rapidjson.load(fp, number_mode=METADATA_NUMBER_MODE)
             dk.training_features_list = dk.data["training_features_list"]
             dk.label_list = dk.data["label_list"]
 
-    def load_data(self, coin: str, dk: FreqaiDataKitchen) -> Any:  # noqa: C901
+    def load_data(self, coin: str, dk: FreqaiDataKitchen) -> Any:
         """
         loads all data required to make a prediction on a sub-train time range
         :returns:
@@ -587,7 +589,7 @@ class FreqaiDataDrawer:
             dk.label_pipeline = self.meta_data_dictionary[coin][LABEL_PIPELINE]
         else:
             with (dk.data_path / f"{dk.model_filename}_{METADATA}.json").open("r") as fp:
-                dk.data = rapidjson.load(fp, number_mode=rapidjson.NM_NATIVE)
+                dk.data = rapidjson.load(fp, number_mode=METADATA_NUMBER_MODE)
 
             with (dk.data_path / f"{dk.model_filename}_{FEATURE_PIPELINE}.pkl").open("rb") as fp:
                 dk.feature_pipeline = cloudpickle.load(fp)

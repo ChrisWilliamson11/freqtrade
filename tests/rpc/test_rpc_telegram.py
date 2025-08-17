@@ -6,7 +6,7 @@ import asyncio
 import logging
 import re
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from functools import reduce
 from random import choice, randint
 from string import ascii_uppercase
@@ -16,12 +16,11 @@ import pytest
 import time_machine
 from pandas import DataFrame
 from sqlalchemy import select
-from telegram import Chat, Message, ReplyKeyboardMarkup, Update
+from telegram import Chat, Message, ReplyKeyboardMarkup, Update, User
 from telegram.error import BadRequest, NetworkError, TelegramError
 
 from freqtrade import __version__
 from freqtrade.constants import CANCEL_REASON
-from freqtrade.edge import PairInfo
 from freqtrade.enums import (
     ExitType,
     MarketDirection,
@@ -67,25 +66,30 @@ def default_conf(default_conf) -> dict:
 
 @pytest.fixture
 def update():
-    message = Message(0, datetime.now(timezone.utc), Chat(1235, 0))
+    message = Message(
+        0,
+        dt_now(),
+        Chat(1235, 0),
+        from_user=User(5432, "test", is_bot=False),
+    )
     _update = Update(0, message=message)
 
     return _update
 
 
 def patch_eventloop_threading(telegrambot):
-    is_init = False
+    init_event = threading.Event()
 
     def thread_fuck():
-        nonlocal is_init
         telegrambot._loop = asyncio.new_event_loop()
-        is_init = True
+        init_event.set()
         telegrambot._loop.run_forever()
 
     x = threading.Thread(target=thread_fuck, daemon=True)
     x.start()
-    while not is_init:
-        pass
+    # Wait for thread to be properly initialized with timeout
+    if not init_event.wait(timeout=5.0):
+        raise RuntimeError("Failed to initialize event loop thread")
 
 
 class DummyCls(Telegram):
@@ -164,10 +168,10 @@ def test_telegram_init(default_conf, mocker, caplog) -> None:
         "['stats'], ['daily'], ['weekly'], ['monthly'], "
         "['count'], ['locks'], ['delete_locks', 'unlock'], "
         "['reload_conf', 'reload_config'], ['show_conf', 'show_config'], "
-        "['stopbuy', 'stopentry'], ['whitelist'], ['blacklist'], "
+        "['pause', 'stopbuy', 'stopentry'], ['whitelist'], ['blacklist'], "
         "['bl_delete', 'blacklist_delete'], "
-        "['logs'], ['edge'], ['health'], ['help'], ['version'], ['marketdir'], "
-        "['order'], ['list_custom_data'], ['tg_info']]"
+        "['logs'], ['health'], ['help'], ['version'], ['marketdir'], "
+        "['order'], ['list_custom_data'], ['tg_info'], ['profit_long'], ['profit_short']]"
     )
 
     assert log_has(message_str, caplog)
@@ -232,8 +236,12 @@ async def test_authorized_only(default_conf, mocker, caplog, update) -> None:
 async def test_authorized_only_unauthorized(default_conf, mocker, caplog) -> None:
     patch_exchange(mocker)
     caplog.set_level(logging.DEBUG)
-    chat = Chat(0xDEADBEEF, 0)
-    message = Message(randint(1, 100), datetime.now(timezone.utc), chat)
+    message = Message(
+        randint(1, 100),
+        dt_now(),
+        Chat(0xDEADBEEF, 0),
+        from_user=User(5432, "test", is_bot=False),
+    )
     update = Update(randint(1, 100), message=message)
 
     default_conf["telegram"]["enabled"] = False
@@ -247,6 +255,42 @@ async def test_authorized_only_unauthorized(default_conf, mocker, caplog) -> Non
     assert not log_has("Executing handler: dummy_handler for chat_id: 3735928559", caplog)
     assert log_has("Rejected unauthorized message from: 3735928559", caplog)
     assert not log_has("Exception occurred within Telegram module", caplog)
+
+
+async def test_authorized_users(default_conf, mocker, caplog, update) -> None:
+    patch_exchange(mocker)
+    caplog.set_level(logging.DEBUG)
+    default_conf["telegram"]["enabled"] = False
+    default_conf["telegram"]["authorized_users"] = ["5432"]
+    bot = FreqtradeBot(default_conf)
+    rpc = RPC(bot)
+    dummy = DummyCls(rpc, default_conf)
+
+    await dummy.dummy_handler(update=update, context=MagicMock())
+    assert dummy.state["called"] is True
+    assert log_has("Executing handler: dummy_handler for chat_id: 1235", caplog)
+    caplog.clear()
+    # Test empty case
+    default_conf["telegram"]["authorized_users"] = []
+    dummy1 = DummyCls(rpc, default_conf)
+    await dummy1.dummy_handler(update=update, context=MagicMock())
+    assert dummy1.state["called"] is False
+    assert log_has_re(r"Unauthorized user tried to .*5432", caplog)
+    caplog.clear()
+    # Test wrong user
+    default_conf["telegram"]["authorized_users"] = ["1234"]
+    dummy1 = DummyCls(rpc, default_conf)
+    await dummy1.dummy_handler(update=update, context=MagicMock())
+    assert dummy1.state["called"] is False
+    assert log_has_re(r"Unauthorized user tried to .*5432", caplog)
+    caplog.clear()
+
+    # Test reverse case again
+    default_conf["telegram"]["authorized_users"] = ["5432"]
+    dummy1 = DummyCls(rpc, default_conf)
+    await dummy1.dummy_handler(update=update, context=MagicMock())
+    assert dummy1.state["called"] is True
+    assert not log_has_re(r"Unauthorized user tried to .*5432", caplog)
 
 
 async def test_authorized_only_exception(default_conf, mocker, caplog, update) -> None:
@@ -638,7 +682,7 @@ async def test_daily_handle(default_conf_usdt, update, ticker, fee, mocker, time
     assert msg_mock.call_count == 1
     assert "Daily Profit over the last 2 days</b>:" in msg_mock.call_args_list[0][0][0]
     assert "Day " in msg_mock.call_args_list[0][0][0]
-    assert str(datetime.now(timezone.utc).date()) in msg_mock.call_args_list[0][0][0]
+    assert str(dt_now().date()) in msg_mock.call_args_list[0][0][0]
     assert "  6.83 USDT" in msg_mock.call_args_list[0][0][0]
     assert "  7.51 USD" in msg_mock.call_args_list[0][0][0]
     assert "(2)" in msg_mock.call_args_list[0][0][0]
@@ -651,11 +695,8 @@ async def test_daily_handle(default_conf_usdt, update, ticker, fee, mocker, time
     await telegram._daily(update=update, context=context)
     assert msg_mock.call_count == 1
     assert "Daily Profit over the last 7 days</b>:" in msg_mock.call_args_list[0][0][0]
-    assert str(datetime.now(timezone.utc).date()) in msg_mock.call_args_list[0][0][0]
-    assert (
-        str((datetime.now(timezone.utc) - timedelta(days=5)).date())
-        in msg_mock.call_args_list[0][0][0]
-    )
+    assert str(dt_now().date()) in msg_mock.call_args_list[0][0][0]
+    assert str((dt_now() - timedelta(days=5)).date()) in msg_mock.call_args_list[0][0][0]
     assert "  6.83 USDT" in msg_mock.call_args_list[0][0][0]
     assert "  7.51 USD" in msg_mock.call_args_list[0][0][0]
     assert "(2)" in msg_mock.call_args_list[0][0][0]
@@ -725,7 +766,7 @@ async def test_weekly_handle(default_conf_usdt, update, ticker, fee, mocker, tim
         in msg_mock.call_args_list[0][0][0]
     )
     assert "Monday " in msg_mock.call_args_list[0][0][0]
-    today = datetime.now(timezone.utc).date()
+    today = dt_now().date()
     first_iso_day_of_current_week = today - timedelta(days=today.weekday())
     assert str(first_iso_day_of_current_week) in msg_mock.call_args_list[0][0][0]
     assert "  2.74 USDT" in msg_mock.call_args_list[0][0][0]
@@ -793,7 +834,7 @@ async def test_monthly_handle(default_conf_usdt, update, ticker, fee, mocker, ti
     assert msg_mock.call_count == 1
     assert "Monthly Profit over the last 2 months</b>:" in msg_mock.call_args_list[0][0][0]
     assert "Month " in msg_mock.call_args_list[0][0][0]
-    today = datetime.now(timezone.utc).date()
+    today = dt_now().date()
     current_month = f"{today.year}-{today.month:02} "
     assert current_month in msg_mock.call_args_list[0][0][0]
     assert "  2.74 USDT" in msg_mock.call_args_list[0][0][0]
@@ -898,11 +939,11 @@ async def test_telegram_profit_handle(
     trade.orders.append(oobj)
     trade.update_trade(oobj)
 
-    trade.close_date = datetime.now(timezone.utc)
+    trade.close_date = dt_now()
     trade.is_open = False
     Trade.commit()
 
-    context.args = [3]
+    context.args = ["3"]
     await telegram._profit(update=update, context=context)
     assert msg_mock.call_count == 1
     assert "*ROI:* Closed trades" in msg_mock.call_args_list[-1][0][0]
@@ -918,12 +959,98 @@ async def test_telegram_profit_handle(
     )
     assert "∙ `6.253 USD`" in msg_mock.call_args_list[-1][0][0]
 
-    assert "*Best Performing:* `ETH/USDT: 9.45%`" in msg_mock.call_args_list[-1][0][0]
+    assert "*Best Performing:* `ETH/USDT: 5.685 USDT (9.47%)`" in msg_mock.call_args_list[-1][0][0]
     assert "*Max Drawdown:*" in msg_mock.call_args_list[-1][0][0]
     assert "*Profit factor:*" in msg_mock.call_args_list[-1][0][0]
     assert "*Winrate:*" in msg_mock.call_args_list[-1][0][0]
     assert "*Expectancy (Ratio):*" in msg_mock.call_args_list[-1][0][0]
     assert "*Trading volume:* `126 USDT`" in msg_mock.call_args_list[-1][0][0]
+
+
+@pytest.mark.asyncio
+async def test_telegram_profit_long_short_handle(
+    default_conf_usdt, update, ticker_usdt, fee, mocker
+):
+    """
+    Test the /profit_long and /profit_short commands to ensure the output content
+    is consistent with /profit, covering both no trades and trades present cases.
+    """
+
+    mocker.patch("freqtrade.rpc.rpc.CryptoToFiatConverter._find_price", return_value=1.1)
+    mocker.patch.multiple(EXMS, fetch_ticker=ticker_usdt, get_fee=fee)
+    telegram, freqtradebot, msg_mock = get_telegram_testobject(mocker, default_conf_usdt)
+
+    # When there are no trades
+    await telegram._profit_long(update=update, context=MagicMock())
+    assert msg_mock.call_count == 1
+    assert "No long trades yet." in msg_mock.call_args_list[0][0][0]
+    msg_mock.reset_mock()
+
+    # Test support with "/profit long"
+    context = MagicMock()
+    context.args = ["long"]
+    await telegram._profit(update=update, context=context)
+    assert msg_mock.call_count == 1
+    assert "No long trades yet." in msg_mock.call_args_list[0][0][0]
+    msg_mock.reset_mock()
+
+    await telegram._profit_short(update=update, context=MagicMock())
+    assert msg_mock.call_count == 1
+    assert "No short trades yet." in msg_mock.call_args_list[0][0][0]
+    msg_mock.reset_mock()
+
+    # Test support with "/profit short"
+    context = MagicMock()
+    context.args = ["short"]
+    await telegram._profit(update=update, context=context)
+    assert msg_mock.call_count == 1
+    assert "No short trades yet." in msg_mock.call_args_list[0][0][0]
+    msg_mock.reset_mock()
+
+    # When there are trades
+    create_mock_trades_usdt(fee)
+
+    # Keep only long trades
+    for t in Trade.get_trades_proxy():
+        t.is_short = False
+    Trade.commit()
+    await telegram._profit_long(update=update, context=MagicMock())
+    msg = msg_mock.call_args_list[0][0][0]
+    assert "*ROI:* Closed long trades" in msg
+    assert "*ROI:* All long trades" in msg
+    assert "*Total Trade Count:*" in msg
+    assert "*Winrate:*" in msg
+    assert "*Expectancy (Ratio):*" in msg
+    assert "*Best Performing:*" in msg
+    assert "*Profit factor:*" in msg
+    assert "*Max Drawdown:*" in msg
+    assert "*Current Drawdown:*" in msg
+    msg_mock.reset_mock()
+
+    # Keep only short trades
+    for t in Trade.get_trades_proxy():
+        t.is_short = True
+    Trade.commit()
+    await telegram._profit_short(update=update, context=MagicMock())
+    msg = msg_mock.call_args_list[0][0][0]
+    assert "*ROI:* Closed short trades" in msg
+    assert "*ROI:* All short trades" in msg
+    assert "*Total Trade Count:*" in msg
+    assert "*Winrate:*" in msg
+    assert "*Expectancy (Ratio):*" in msg
+    assert "*Best Performing:*" in msg
+    assert "*Profit factor:*" in msg
+    assert "*Max Drawdown:*" in msg
+    assert "*Current Drawdown:*" in msg
+    msg_mock.reset_mock()
+
+    # Test parameter passing
+    context = MagicMock()
+    context.args = ["2"]
+    await telegram._profit_long(update=update, context=context)
+    assert msg_mock.call_count == 1
+    await telegram._profit_short(update=update, context=context)
+    assert msg_mock.call_count == 2
 
 
 @pytest.mark.parametrize("is_short", [True, False])
@@ -1180,15 +1307,15 @@ async def test_stop_handle_already_stopped(default_conf, update, mocker) -> None
     assert "already stopped" in msg_mock.call_args_list[0][0][0]
 
 
-async def test_stopbuy_handle(default_conf, update, mocker) -> None:
+async def test_pause_handle(default_conf, update, mocker) -> None:
     telegram, freqtradebot, msg_mock = get_telegram_testobject(mocker, default_conf)
 
-    assert freqtradebot.config["max_open_trades"] != 0
-    await telegram._stopentry(update=update, context=MagicMock())
-    assert freqtradebot.config["max_open_trades"] == 0
+    assert freqtradebot.state == State.RUNNING
+    await telegram._pause(update=update, context=MagicMock())
+    assert freqtradebot.state == State.PAUSED
     assert msg_mock.call_count == 1
     assert (
-        "No more entries will occur from now. Run /reload_config to reset."
+        "paused, no more entries will occur from now. Run /start to enable entries."
         in msg_mock.call_args_list[0][0][0]
     )
 
@@ -1591,7 +1718,7 @@ async def test_telegram_performance_handle(default_conf_usdt, update, ticker, fe
     await telegram._performance(update=update, context=MagicMock())
     assert msg_mock.call_count == 1
     assert "Performance" in msg_mock.call_args_list[0][0][0]
-    assert "<code>XRP/USDT\t2.842 USDT (10.00%) (1)</code>" in msg_mock.call_args_list[0][0][0]
+    assert "<code>XRP/USDT\t2.842 USDT (9.47%) (1)</code>" in msg_mock.call_args_list[0][0][0]
 
 
 async def test_telegram_entry_tag_performance_handle(
@@ -1611,7 +1738,7 @@ async def test_telegram_entry_tag_performance_handle(
     await telegram._enter_tag_performance(update=update, context=context)
     assert msg_mock.call_count == 1
     assert "Entry Tag Performance" in msg_mock.call_args_list[0][0][0]
-    assert "`TEST1\t3.987 USDT (5.00%) (1)`" in msg_mock.call_args_list[0][0][0]
+    assert "`TEST1\t3.987 USDT (1.99%) (1)`" in msg_mock.call_args_list[0][0][0]
 
     context.args = ["XRP/USDT"]
     await telegram._enter_tag_performance(update=update, context=context)
@@ -1644,7 +1771,7 @@ async def test_telegram_exit_reason_performance_handle(
     await telegram._exit_reason_performance(update=update, context=context)
     assert msg_mock.call_count == 1
     assert "Exit Reason Performance" in msg_mock.call_args_list[0][0][0]
-    assert "`roi\t2.842 USDT (10.00%) (1)`" in msg_mock.call_args_list[0][0][0]
+    assert "`roi\t2.842 USDT (9.47%) (1)`" in msg_mock.call_args_list[0][0][0]
     context.args = ["XRP/USDT"]
 
     await telegram._exit_reason_performance(update=update, context=context)
@@ -1910,40 +2037,6 @@ async def test_telegram_logs(default_conf, update, mocker) -> None:
     assert msg_mock.call_count >= 2
 
 
-async def test_edge_disabled(default_conf, update, mocker) -> None:
-    telegram, _, msg_mock = get_telegram_testobject(mocker, default_conf)
-
-    await telegram._edge(update=update, context=MagicMock())
-    assert msg_mock.call_count == 1
-    assert "Edge is not enabled." in msg_mock.call_args_list[0][0][0]
-
-
-async def test_edge_enabled(edge_conf, update, mocker) -> None:
-    mocker.patch(
-        "freqtrade.edge.Edge._cached_pairs",
-        mocker.PropertyMock(
-            return_value={
-                "E/F": PairInfo(-0.01, 0.66, 3.71, 0.50, 1.71, 10, 60),
-            }
-        ),
-    )
-
-    telegram, _, msg_mock = get_telegram_testobject(mocker, edge_conf)
-
-    await telegram._edge(update=update, context=MagicMock())
-    assert msg_mock.call_count == 1
-    assert "<b>Edge only validated following pairs:</b>\n<pre>" in msg_mock.call_args_list[0][0][0]
-    assert "Pair      Winrate    Expectancy    Stoploss" in msg_mock.call_args_list[0][0][0]
-
-    msg_mock.reset_mock()
-
-    mocker.patch("freqtrade.edge.Edge._cached_pairs", mocker.PropertyMock(return_value={}))
-    await telegram._edge(update=update, context=MagicMock())
-    assert msg_mock.call_count == 1
-    assert "<b>Edge only validated following pairs:</b>" in msg_mock.call_args_list[0][0][0]
-    assert "Winrate" not in msg_mock.call_args_list[0][0][0]
-
-
 @pytest.mark.parametrize(
     "is_short,regex_pattern",
     [(True, r"now[ ]*XRP\/BTC \(#3\)  -1.00% \("), (False, r"now[ ]*XRP\/BTC \(#3\)  1.00% \(")],
@@ -1994,7 +2087,7 @@ async def test_telegram_delete_trade(mocker, update, default_conf, fee, is_short
     context.args = [1]
     await telegram._delete_trade(update=update, context=context)
     assert msg_mock.call_count == 1
-    assert "Deleted trade 1." in msg_mock.call_args_list[0][0][0]
+    assert "Deleted trade #1" in msg_mock.call_args_list[0][0][0]
     assert "Please make sure to take care of this asset" in msg_mock.call_args_list[0][0][0]
 
 
@@ -2861,9 +2954,7 @@ async def test_telegram_list_custom_data(default_conf_usdt, update, ticker, fee,
     context.args = ["1"]
     await telegram._list_custom_data(update=update, context=context)
     assert msg_mock.call_count == 1
-    assert (
-        "Didn't find any custom-data entries for Trade ID: `1`" in msg_mock.call_args_list[0][0][0]
-    )
+    assert "No custom-data found for Trade ID: 1." in msg_mock.call_args_list[0][0][0]
     msg_mock.reset_mock()
 
     # Add some custom data
@@ -2876,18 +2967,16 @@ async def test_telegram_list_custom_data(default_conf_usdt, update, ticker, fee,
     assert msg_mock.call_count == 3
     assert "Found custom-data entries: " in msg_mock.call_args_list[0][0][0]
     assert (
-        "*Key:* `test_int`\n*ID:* `1`\n*Trade ID:* `1`\n*Type:* `int`\n"
-        "*Value:* `1`\n*Create Date:*"
+        "*Key:* `test_int`\n*Type:* `int`\n*Value:* `1`\n*Create Date:*"
     ) in msg_mock.call_args_list[1][0][0]
     assert (
-        "*Key:* `test_dict`\n*ID:* `2`\n*Trade ID:* `1`\n*Type:* `dict`\n"
-        '*Value:* `{"test": "dict"}`\n*Create Date:* `'
+        "*Key:* `test_dict`\n*Type:* `dict`\n*Value:* `{'test': 'dict'}`\n*Create Date:* `"
     ) in msg_mock.call_args_list[2][0][0]
 
     msg_mock.reset_mock()
 
 
-def test_noficiation_settings(default_conf_usdt, mocker):
+def test_notification_settings(default_conf_usdt, mocker):
     (telegram, _, _) = get_telegram_testobject(mocker, default_conf_usdt)
     telegram._config["telegram"].update(
         {

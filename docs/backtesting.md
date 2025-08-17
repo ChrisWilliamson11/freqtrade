@@ -5,6 +5,8 @@ This page explains how to validate your strategy performance by using Backtestin
 Backtesting requires historic data to be available.
 To learn how to get data for the pairs and exchange you're interested in, head over to the [Data Downloading](data-download.md) section of the documentation.
 
+Backtesting is also available in [webserver mode](freq-ui.md#backtesting), which allows you to run backtests via the web interface.
+
 ## Backtesting command reference
 
 --8<-- "commands/backtesting.md"
@@ -103,11 +105,13 @@ Only use this if you're sure you'll not want to plot or analyze your results fur
 
 ---
 
-Exporting trades to file specifying a custom filename
+Exporting trades to file specifying a custom directory
 
 ```bash
-freqtrade backtesting --strategy backtesting --export trades --export-filename=backtest_samplestrategy.json
+freqtrade backtesting --strategy backtesting --export trades --export-filename=user_data/custom-backtest-results
 ```
+
+---
 
 Please also read about the [strategy startup period](strategy-customization.md#strategy-startup-period).
 
@@ -209,6 +213,7 @@ A backtesting result will look like that:
 | Sortino                     | 1.88                |
 | Sharpe                      | 2.97                |
 | Calmar                      | 6.29                |
+| SQN                         | 2.45                |
 | Profit factor               | 1.11                |
 | Expectancy (Ratio)          | -0.15 (-0.05)       |
 | Avg. stake amount           | 0.001      BTC      |
@@ -315,8 +320,10 @@ It contains some useful key metrics about performance of your strategy on backte
 | Sortino                     | 1.88                |
 | Sharpe                      | 2.97                |
 | Calmar                      | 6.29                |
+| SQN                         | 2.45                |
 | Profit factor               | 1.11                |
 | Expectancy (Ratio)          | -0.15 (-0.05)       |
+| Avg. daily profit           | 0.0001     BTC      |
 | Avg. stake amount           | 0.001      BTC      |
 | Total trade volume          | 0.429      BTC      |
 |                             |                     |
@@ -368,10 +375,13 @@ It contains some useful key metrics about performance of your strategy on backte
 - `Sortino`: Annualized Sortino ratio.
 - `Sharpe`: Annualized Sharpe ratio.
 - `Calmar`: Annualized Calmar ratio.
+- `SQN`: System Quality Number (SQN) - by Van Tharp.
 - `Profit factor`: profit / loss.
+- `Expectancy (Ratio)`: Expectancy ratio, which is the average profit or loss per trade. A negative expectancy ratio means that your strategy is not profitable.
+- `Avg. daily profit`: Average profit per day, calculated as `(Total Profit / Backtest Days)`.
 - `Avg. stake amount`: Average stake amount, either `stake_amount` or the average when using dynamic stake amount.
 - `Total trade volume`: Volume generated on the exchange to reach the above profit.
-- `Best Pair` / `Worst Pair`: Best and worst performing pair, and it's corresponding `Tot Profit %`.
+- `Best Pair` / `Worst Pair`: Best and worst performing pair (based on absolute profit), and it's corresponding `Tot Profit %`.
 - `Best Trade` / `Worst Trade`: Biggest single winning trade and biggest single losing trade.
 - `Best day` / `Worst day`: Best and worst day based on daily profit.
 - `Days win/draw/lose`: Winning / Losing days (draws are usually days without closed trade).
@@ -431,6 +441,24 @@ To save time, by default backtest will reuse a cached result from within the las
 
 To further analyze your backtest results, freqtrade will export the trades to file by default.
 You can then load the trades to perform further analysis as shown in the [data analysis](strategy_analysis_example.md#load-backtest-results-to-pandas-dataframe) backtesting section.
+
+Also, you can use freqtrade in [webserver mode](freq-ui.md#backtesting) to visualize the backtest results in a web interface.
+This mode also allows you to load existing backtest results, so you can analyze them without running the backtest again.  
+For this mode - `--notes "<notes>"` can be used to add notes to the backtest results, which will be shown in the web interface.
+
+### Backtest output file
+
+The output file freqtrade produces is a zip file containing the following files:
+
+- The backtest report in json format
+- the market change data in feather format
+- a copy of the strategy file
+- a copy of the strategy parameters (if a parameter file was used)
+- a sanitized copy of the config file
+
+This will ensure results are reproducible - under the assumption that the same data is available.
+
+Only the strategy file and the config file are included in the zip file, eventual dependencies are not included.
 
 ## Assumptions made by backtesting
 
@@ -508,7 +536,12 @@ To utilize this, you can append `--timeframe-detail 5m` to your regular backtest
 freqtrade backtesting --strategy AwesomeStrategy --timeframe 1h --timeframe-detail 5m
 ```
 
-This will load 1h data as well as 5m data for the timeframe. The strategy will be analyzed with the 1h timeframe, and Entry orders will only be placed at the main timeframe, however Order fills and exit signals will be evaluated at the 5m candle, simulating intra-candle movements.
+This will load 1h data (the main timeframe) as well as 5m data (detail timeframe) for the selected timerange.
+The strategy will be analyzed with the 1h timeframe.
+Candles where activity may take place (there's an active signal, the pair is in a trade) are  evaluated at the 5m timeframe.
+This will allow for a more accurate simulation of intra-candle movements - and can lead to different results, especially on higher timeframes.
+
+Entries will generally still happen at the main candle's open, however freed trade slots may be freed earlier (if the exit signal is triggered on the 5m candle), which can then be used for a new trade of a different pair.
 
 All callback functions (`custom_exit()`, `custom_stoploss()`, ... ) will be running for each 5m candle once the trade is opened (so 12 times in the above example of 1h timeframe, and 5m detailed timeframe).
 
@@ -519,6 +552,27 @@ Also, data must be available / downloaded already.
 
 !!! Tip
     You can use this function as the last part of strategy development, to ensure your strategy is not exploiting one of the [backtesting assumptions](#assumptions-made-by-backtesting). Strategies that perform similarly well with this mode have a good chance to perform well in dry/live modes too (although only forward-testing (dry-mode) can really confirm a strategy).
+
+??? Sample "Extreme Difference Example"
+    Using `--timeframe-detail` on an extreme example (all below pairs have the 10:00 candle with an entry signal) may lead to the following backtesting Trade sequence with 1 max_open_trades:
+
+    | Pair | Entry Time | Exit Time | Duration |
+    |------|------------|-----------| -------- |
+    | BTC/USDT | 2024-01-01 10:00:00 | 2021-01-01 10:05:00 | 5m |
+    | ETH/USDT | 2024-01-01 10:05:00 | 2021-01-01 10:15:00 | 10m |
+    | XRP/USDT | 2024-01-01 10:15:00 | 2021-01-01 10:30:00 | 15m |
+    | SOL/USDT | 2024-01-01 10:15:00 | 2021-01-01 11:05:00 | 50m |
+    | BTC/USDT | 2024-01-01 11:05:00 | 2021-01-01 12:00:00 | 55m |
+
+    Without timeframe-detail, this would look like:
+
+    | Pair | Entry Time | Exit Time | Duration |
+    |------|------------|-----------| -------- |
+    | BTC/USDT | 2024-01-01 10:00:00 | 2021-01-01 11:00:00 | 1h |
+    | BTC/USDT | 2024-01-01 11:00:00 | 2021-01-01 12:00:00 | 1h |
+
+    The difference is significant, as without detail data, only the first `max_open_trades` signals per candle are evaluated, and the trade slots are only freed at the end of the candle, allowing for a new trade to be opened at the next candle.
+
 
 ## Backtesting multiple strategies
 

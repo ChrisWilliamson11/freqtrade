@@ -145,7 +145,7 @@ To use BNFCR futures, you will have to have the following combination of setting
 
 The `stake_currency` setting defines the markets the bot will be operating in. This choice is really arbitrary.
 
-On the exchange, you'll have to use "Multi-asset Mode" - and "Position Mode set to "One-way Mode".
+On the exchange, you'll have to use "Multi-asset Mode" - and "Position Mode set to "One-way Mode".  
 Freqtrade will check these settings on startup, but won't attempt to change them.
 
 ## Bingx
@@ -328,6 +328,26 @@ It's therefore required to pass the UID as well.
 !!! Warning "Necessary Verification"
     Bitmart requires Verification Lvl2 to successfully trade on the spot market through the API - even though trading via UI works just fine with just Lvl1 verification.
 
+## Bitget
+
+Bitget requires a passphrase for each api key, you will therefore need to add this key into the configuration so your exchange section looks as follows:
+
+```json
+"exchange": {
+    "name": "bitget",
+    "key": "your_exchange_key",
+    "secret": "your_exchange_secret",
+    "password": "your_exchange_api_key_password",
+    // ...
+}
+```
+
+Bitget supports [time_in_force](configuration.md#understand-order_time_in_force).
+
+!!! Tip "Stoploss on Exchange"
+    Bitget supports `stoploss_on_exchange` and can use both stop-loss-market and stop-loss-limit orders. It provides great advantages, so we recommend to benefit from it.
+    You can use either `"limit"` or `"market"` in the `order_types.stoploss` configuration setting to decide which type of stoploss shall be used.
+
 ## Hyperliquid
 
 !!! Tip "Stoploss on Exchange"
@@ -339,13 +359,13 @@ This needs to be configured like this:
 ```json
 "exchange": {
     "name": "hyperliquid",
-    "walletAddress": "your_eth_wallet_address",
+    "walletAddress": "your_eth_wallet_address",  // This should NOT be your API Wallet Address!
     "privateKey": "your_api_private_key",
     // ...
 }
 ```
 
-* walletAddress in hex format: `0x<40 hex characters>` - Can be easily copied from your wallet - and should be your wallet address, not your API Wallet Address.
+* walletAddress in hex format: `0x<40 hex characters>` - Can be easily copied from your wallet - and should be your main wallet address, not your API Wallet Address.
 * privateKey in hex format: `0x<64 hex characters>` - Use the key the API Wallet shows on creation.
 
 Hyperliquid handles deposits and withdrawals on the Arbitrum One chain, a Layer 2 scaling solution built on top of Ethereum. Hyperliquid uses USDC as quote / collateral. The process of depositing USDC on Hyperliquid requires a couple of steps, see [how to start trading](https://hyperliquid.gitbook.io/hyperliquid-docs/onboarding/how-to-start-trading) for details on what steps are needed.
@@ -362,6 +382,50 @@ Hyperliquid handles deposits and withdrawals on the Arbitrum One chain, a Layer 
     * Don't use the same mnemonic as the one you had to backup when initializing a hardware wallet, using the same mnemonic basically deletes the security of your hardware wallet.
     * Create a different software wallet, only transfer the funds you want to trade with to that wallet, and use that wallet to trade on Hyperliquid.
     * If you have funds you don't want to use for trading (after making a profit for example), transfer them back to your hardware wallet.
+
+### Hyperliquid Vault / Subaccount
+
+Hyperliquid allows you to create either a vault or a subaccount.  
+To use these with Freqtrade, you will need to use the following configuration pattern:
+
+``` json
+"exchange": {
+    "name": "hyperliquid",
+    "walletAddress": "your_vault_address",  // Vault or subaccount address
+    "privateKey": "your_api_private_key",
+    "ccxt_config": {
+        "options": {
+            "vaultAddress": "your_vault_address" // Optional, only if you want to use a vault or subaccount
+        }
+    },
+    // ...
+}
+```
+
+Your balance and trades will now be used from your vault / subaccount - and no longer from your main account.
+
+### Historic Hyperliquid data
+
+The Hyperliquid API does not provide historic data beyond the single call to fetch current data, so downloading data is not possible, as the downloaded data would not constitute proper historic data.
+
+## Bitvavo
+
+If your account is required to use an operatorId, you can set it in the configuration file as follows:
+
+``` json
+"exchange": {
+        "name": "bitvavo",
+        "key": "",
+        "secret": "",
+        "ccxt_config": {
+            "options": {
+                "operatorId": "123567"
+            }
+        },
+   }
+```
+
+Bitvavo expects the `operatorId` to be an integer.
 
 ## All exchanges
 

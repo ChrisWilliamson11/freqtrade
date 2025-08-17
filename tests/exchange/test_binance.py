@@ -6,6 +6,7 @@ import ccxt
 import pandas as pd
 import pytest
 
+from freqtrade.data.converter.trade_converter import trades_dict_to_list
 from freqtrade.enums import CandleType, MarginMode, TradingMode
 from freqtrade.exceptions import DependencyException, InvalidOrderException, OperationalException
 from freqtrade.exchange.exchange_utils_timeframe import timeframe_to_seconds
@@ -45,7 +46,7 @@ def test__get_params_binance(default_conf, mocker, side, order_type, time_in_for
 )
 def test_create_stoploss_order_binance(default_conf, mocker, limitratio, expected, side, trademode):
     api_mock = MagicMock()
-    order_id = f"test_prod_buy_{randint(0, 10 ** 6)}"
+    order_id = f"test_prod_buy_{randint(0, 10**6)}"
     order_type = "stop_loss_limit" if trademode == TradingMode.SPOT else "stop"
 
     api_mock.create_order = MagicMock(return_value={"id": order_id, "info": {"foo": "bar"}})
@@ -298,7 +299,7 @@ def test_liquidation_price_binance(
 
     def get_maint_ratio(pair_, stake_amount):
         if pair_ != pair:
-            oc = [c for c in open_trades if c["pair"] == pair_][0]
+            oc = next(c for c in open_trades if c["pair"] == pair_)
             return oc["mm_ratio"], oc["maintenance_amt"]
         return mm_ratio, maintenance_amt
 
@@ -1002,6 +1003,7 @@ def test_get_maintenance_ratio_and_amt_binance(
 
 
 async def test__async_get_trade_history_id_binance(default_conf_usdt, mocker, fetch_trades_result):
+    default_conf_usdt["exchange"]["only_from_ccxt"] = True
     exchange = get_patched_exchange(mocker, default_conf_usdt, exchange="binance")
 
     async def mock_get_trade_hist(pair, *args, **kwargs):
@@ -1013,10 +1015,10 @@ async def test__async_get_trade_history_id_binance(default_conf_usdt, mocker, fe
                 # Don't expect to get here
                 raise ValueError("Unexpected call")
                 # return fetch_trades_result[:-2]
-        elif kwargs.get("params", {}).get(exchange._trades_pagination_arg) == "0":
+        elif kwargs.get("params", {}).get(exchange._ft_has["trades_pagination_arg"]) == "0":
             # Return first 3
             return fetch_trades_result[:-2]
-        elif kwargs.get("params", {}).get(exchange._trades_pagination_arg) in (
+        elif kwargs.get("params", {}).get(exchange._ft_has["trades_pagination_arg"]) in (
             fetch_trades_result[-3]["id"],
             1565798399752,
         ):
@@ -1053,6 +1055,56 @@ async def test__async_get_trade_history_id_binance(default_conf_usdt, mocker, fe
 
     assert fetch_trades_cal[2][1]["params"][pagination_arg] != "0"
     assert fetch_trades_cal[3][1]["params"][pagination_arg] != "0"
+
+    # Clean up event loop to avoid warnings
+    exchange.close()
+
+
+async def test__async_get_trade_history_id_binance_fast(
+    default_conf_usdt, mocker, fetch_trades_result
+):
+    default_conf_usdt["exchange"]["only_from_ccxt"] = False
+    exchange = get_patched_exchange(mocker, default_conf_usdt, exchange="binance")
+
+    async def mock_get_trade_hist(pair, *args, **kwargs):
+        if "since" in kwargs:
+            pass
+            # older than initial call
+            # if kwargs["since"] < 1565798399752:
+            #     return []
+            # else:
+            #     # Don't expect to get here
+            #     raise ValueError("Unexpected call")
+            #     # return fetch_trades_result[:-2]
+        elif kwargs.get("params", {}).get(exchange._ft_has["trades_pagination_arg"]) == "0":
+            # Return first 3
+            return fetch_trades_result[:-2]
+        # elif kwargs.get("params", {}).get(exchange._ft_has['trades_pagination_arg']) in (
+        #     fetch_trades_result[-3]["id"],
+        #     1565798399752,
+        # ):
+        #     # Return 2
+        #     return fetch_trades_result[-3:-1]
+        # else:
+        #     # Return last 2
+        #     return fetch_trades_result[-2:]
+
+    pair = "ETH/BTC"
+    mocker.patch(
+        "freqtrade.exchange.binance.download_archive_trades",
+        return_value=(pair, trades_dict_to_list(fetch_trades_result[-2:])),
+    )
+
+    exchange._api_async.fetch_trades = MagicMock(side_effect=mock_get_trade_hist)
+
+    ret = await exchange._async_get_trade_history(
+        pair,
+        since=fetch_trades_result[0]["timestamp"],
+        until=fetch_trades_result[-1]["timestamp"] - 1,
+    )
+
+    assert ret[0] == pair
+    assert isinstance(ret[1], list)
 
     # Clean up event loop to avoid warnings
     exchange.close()

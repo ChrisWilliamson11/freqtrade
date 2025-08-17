@@ -15,7 +15,7 @@ usage: freqtrade lookahead-analysis [-h] [-v] [--no-color] [--logfile FILE]
                                     [--timeframe-detail TIMEFRAME_DETAIL]
                                     [--strategy-list STRATEGY_LIST [STRATEGY_LIST ...]]
                                     [--export {none,trades,signals}]
-                                    [--export-filename PATH]
+                                    [--backtest-filename PATH]
                                     [--freqai-backtest-live-models]
                                     [--minimum-trade-amount INT]
                                     [--targeted-trade-amount INT]
@@ -60,10 +60,9 @@ options:
                         becomes `backtest-data-SampleStrategy.json`
   --export {none,trades,signals}
                         Export backtest results (default: trades).
-  --export-filename PATH, --backtest-filename PATH
-                        Use this filename for backtest results.Requires
-                        `--export` to be set as well. Example: `--export-filen
-                        ame=user_data/backtest_results/backtest_today.json`
+  --backtest-filename PATH, --export-filename PATH
+                        Use this filename for backtest results.Example:
+                        `--backtest-filename=user_data/backtest_results/`
   --freqai-backtest-live-models
                         Run backtest with ready models.
   --minimum-trade-amount INT
@@ -89,7 +88,9 @@ Common arguments:
                         exists). Multiple --config options may be used. Can be
                         set to `-` to read config from stdin.
   -d PATH, --datadir PATH, --data-dir PATH
-                        Path to directory with historical backtesting data.
+                        Path to the base directory of the exchange with
+                        historical backtesting data. To see futures data, use
+                        trading-mode additionally.
   --userdir PATH, --user-data-dir PATH
                         Path to userdata directory.
 

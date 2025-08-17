@@ -4,7 +4,7 @@ import logging
 import platform
 import re
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, PropertyMock
 
@@ -16,8 +16,7 @@ from xdist.scheduler.loadscope import LoadScopeScheduling
 from freqtrade import constants
 from freqtrade.commands import Arguments
 from freqtrade.data.converter import ohlcv_to_dataframe, trades_list_to_df
-from freqtrade.edge import PairInfo
-from freqtrade.enums import CandleType, MarginMode, RunMode, SignalDirection, TradingMode
+from freqtrade.enums import CandleType, MarginMode, SignalDirection, TradingMode
 from freqtrade.exchange import Exchange, timeframe_to_minutes, timeframe_to_seconds
 from freqtrade.freqtradebot import FreqtradeBot
 from freqtrade.persistence import LocalTrade, Order, Trade, init_db
@@ -48,7 +47,7 @@ from tests.conftest_trades_usdt import (
 logging.getLogger("").setLevel(logging.INFO)
 
 
-# Do not mask numpy errors as warnings that no one read, raise the exсeption
+# Do not mask numpy errors as warnings that no one read, raise the exception
 np.seterr(all="raise")
 
 CURRENT_TEST_STRATEGY = "StrategyTestV3"
@@ -127,7 +126,7 @@ def get_args(args):
 def generate_trades_history(n_rows, start_date: datetime | None = None, days=5):
     np.random.seed(42)
     if not start_date:
-        start_date = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        start_date = datetime(2020, 1, 1, tzinfo=UTC)
 
         # Generate random data
     end_date = start_date + timedelta(days=days)
@@ -165,7 +164,7 @@ def generate_trades_history(n_rows, start_date: datetime | None = None, days=5):
     )
     df["date"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     df = df.sort_values("timestamp").reset_index(drop=True)
-    assert list(df.columns) == constants.DEFAULT_TRADES_COLUMNS + ["date"]
+    assert list(df.columns) == [*constants.DEFAULT_TRADES_COLUMNS, "date"]
     return df
 
 
@@ -259,6 +258,7 @@ def patch_exchange(
             "._supported_trading_mode_margin_pairs",
             PropertyMock(
                 return_value=[
+                    (TradingMode.SPOT, MarginMode.NONE),
                     (TradingMode.MARGIN, MarginMode.CROSS),
                     (TradingMode.MARGIN, MarginMode.ISOLATED),
                     (TradingMode.FUTURES, MarginMode.CROSS),
@@ -296,24 +296,6 @@ def patch_whitelist(mocker, conf) -> None:
         "freqtrade.freqtradebot.FreqtradeBot._refresh_active_whitelist",
         MagicMock(return_value=conf["exchange"]["pair_whitelist"]),
     )
-
-
-def patch_edge(mocker) -> None:
-    # "ETH/BTC",
-    # "LTC/BTC",
-    # "XRP/BTC",
-    # "NEO/BTC"
-
-    mocker.patch(
-        "freqtrade.edge.Edge._cached_pairs",
-        mocker.PropertyMock(
-            return_value={
-                "NEO/BTC": PairInfo(-0.20, 0.66, 3.71, 0.50, 1.71, 10, 25),
-                "LTC/BTC": PairInfo(-0.21, 0.66, 3.71, 0.50, 1.71, 11, 20),
-            }
-        ),
-    )
-    mocker.patch("freqtrade.edge.Edge.calculate", MagicMock(return_value=True))
 
 
 # Functions for recurrent object patching
@@ -539,7 +521,11 @@ def patch_torch_initlogs(mocker) -> None:
         mocked_module = types.ModuleType(module_name)
         sys.modules[module_name] = mocked_module
     else:
-        mocker.patch("torch._logging._init_logs")
+        try:
+            mocker.patch("torch._logging._init_logs")
+        except ModuleNotFoundError:
+            # Allow running limited tests to run without freqAI dependencies
+            pass
 
 
 @pytest.fixture(autouse=True)
@@ -547,6 +533,14 @@ def user_dir(mocker, tmp_path) -> Path:
     user_dir = tmp_path / "user_data"
     mocker.patch("freqtrade.configuration.configuration.create_userdata_dir", return_value=user_dir)
     return user_dir
+
+
+@pytest.fixture()
+def keep_log_config_loggers(mocker):
+    # Mock the _handle_existing_loggers function to prevent it from disabling all loggers.
+    # This is necessary to keep all loggers active, and avoid random failures if
+    # this file is ran before the test_rest_client file.
+    mocker.patch("logging.config._handle_existing_loggers")
 
 
 @pytest.fixture(autouse=True)
@@ -644,6 +638,7 @@ def get_default_conf(testdatadir):
         "trading_mode": "spot",
         "margin_mode": "",
         "candle_type_def": CandleType.SPOT,
+        "original_config": {},
     }
     return configuration
 
@@ -981,6 +976,29 @@ def get_markets():
                 "amount": {"min": 1.0, "max": 90000000.0},
                 "price": {"min": None, "max": None},
                 "cost": {"min": 0.0001, "max": None},
+                "leverage": {
+                    "min": None,
+                    "max": None,
+                },
+            },
+            "info": {},
+        },
+        "ETC/BTC": {
+            "id": "ETCBTC",
+            "symbol": "ETC/BTC",
+            "base": "ETC",
+            "quote": "BTC",
+            "active": True,
+            "spot": True,
+            "swap": False,
+            "linear": None,
+            "type": "spot",
+            "contractSize": None,
+            "precision": {"base": 8, "quote": 8, "amount": 2, "price": 7},
+            "limits": {
+                "amount": {"min": 0.01, "max": 90000000.0},
+                "price": {"min": 1e-07, "max": 1000.0},
+                "cost": {"min": 0.0001, "max": 9000000.0},
                 "leverage": {
                     "min": None,
                     "max": None,
@@ -1754,15 +1772,6 @@ def limit_buy_order_open():
         "remaining": 90.99181073,
         "status": "open",
     }
-
-
-@pytest.fixture(scope="function")
-def limit_buy_order(limit_buy_order_open):
-    order = deepcopy(limit_buy_order_open)
-    order["status"] = "closed"
-    order["filled"] = order["amount"]
-    order["remaining"] = 0.0
-    return order
 
 
 @pytest.fixture
@@ -2578,31 +2587,6 @@ def buy_order_fee():
         "status": "closed",
         "fee": None,
     }
-
-
-@pytest.fixture(scope="function")
-def edge_conf(default_conf):
-    conf = deepcopy(default_conf)
-    conf["runmode"] = RunMode.DRY_RUN
-    conf["max_open_trades"] = -1
-    conf["tradable_balance_ratio"] = 0.5
-    conf["stake_amount"] = constants.UNLIMITED_STAKE_AMOUNT
-    conf["edge"] = {
-        "enabled": True,
-        "process_throttle_secs": 1800,
-        "calculate_since_number_of_days": 14,
-        "allowed_risk": 0.01,
-        "stoploss_range_min": -0.01,
-        "stoploss_range_max": -0.1,
-        "stoploss_range_step": -0.01,
-        "maximum_winrate": 0.80,
-        "minimum_expectancy": 0.20,
-        "min_trade_number": 15,
-        "max_trade_duration_minute": 1440,
-        "remove_pumps": False,
-    }
-
-    return conf
 
 
 @pytest.fixture
@@ -3424,6 +3408,37 @@ def leverage_tiers():
                 "maintenanceMarginRate": 0.5,
                 "maxLeverage": 1,
                 "maintAmt": 654500.0,
+            },
+        ],
+        "TIA/USDT:USDT": [
+            # Okx tier - these have a gap between maxNotional and the next minNotional
+            {
+                "minNotional": 0.0,
+                "maxNotional": 6500.0,
+                "maintenanceMarginRate": 0.0065,
+                "maxLeverage": 50.0,
+                "maintAmt": None,
+            },
+            {
+                "minNotional": 6501.0,
+                "maxNotional": 12000.0,
+                "maintenanceMarginRate": 0.01,
+                "maxLeverage": 40.0,
+                "maintAmt": None,
+            },
+            {
+                "minNotional": 12001.0,
+                "maxNotional": 25000.0,
+                "maintenanceMarginRate": 0.015,
+                "maxLeverage": 20.0,
+                "maintAmt": None,
+            },
+            {
+                "minNotional": 25001.0,
+                "maxNotional": 50000.0,
+                "maintenanceMarginRate": 0.02,
+                "maxLeverage": 18.18,
+                "maintAmt": None,
             },
         ],
     }

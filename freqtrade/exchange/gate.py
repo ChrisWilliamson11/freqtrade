@@ -30,12 +30,12 @@ class Gate(Exchange):
     unified_account = False
 
     _ft_has: FtHas = {
-        "ohlcv_candle_limit": 1000,
         "order_time_in_force": ["GTC", "IOC"],
         "stoploss_on_exchange": True,
         "stoploss_order_types": {"limit": "limit"},
         "stop_price_param": "stopPrice",
         "stop_price_prop": "stopPrice",
+        "l2_limit_upper": 1000,
         "marketOrderRequiresPrice": True,
         "trades_has_history": False,  # Endpoint would support this - but ccxt doesn't.
     }
@@ -45,6 +45,8 @@ class Gate(Exchange):
         "marketOrderRequiresPrice": False,
         "funding_fee_candle_limit": 90,
         "stop_price_type_field": "price_type",
+        "l2_limit_upper": 300,
+        "stoploss_blocks_assets": False,
         "stop_price_type_value_mapping": {
             PriceType.LAST: 0,
             PriceType.MARK: 1,
@@ -53,10 +55,10 @@ class Gate(Exchange):
     }
 
     _supported_trading_mode_margin_pairs: list[tuple[TradingMode, MarginMode]] = [
-        # TradingMode.SPOT always supported and not required in this list
+        (TradingMode.SPOT, MarginMode.NONE),
         # (TradingMode.MARGIN, MarginMode.CROSS),
         # (TradingMode.FUTURES, MarginMode.CROSS),
-        (TradingMode.FUTURES, MarginMode.ISOLATED)
+        (TradingMode.FUTURES, MarginMode.ISOLATED),
     ]
 
     @retrier
@@ -68,7 +70,6 @@ class Gate(Exchange):
         """
         try:
             if not self._config["dry_run"]:
-                # TODO: This should work with 4.4.34 and later.
                 self._api.load_unified_status()
                 is_unified = self._api.options.get("unifiedAccount")
 

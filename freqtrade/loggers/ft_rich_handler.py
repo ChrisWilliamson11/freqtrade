@@ -4,7 +4,6 @@ from logging import Handler
 from rich._null_file import NullFile
 from rich.console import Console
 from rich.text import Text
-from rich.traceback import Traceback
 
 
 class FtRichHandler(Handler):
@@ -22,7 +21,9 @@ class FtRichHandler(Handler):
             msg = self.format(record)
             # Format log message
             log_time = Text(
-                datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S,%f")[:-3],
+                datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
+                if record.created
+                else "N/A",
             )
             name = Text(record.name, style="violet")
             log_level = Text(record.levelname, style=f"logging.level.{record.levelname.lower()}")
@@ -38,13 +39,11 @@ class FtRichHandler(Handler):
             self._console.print(
                 Text() + log_time + gray_sep + name + gray_sep + log_level + gray_sep + msg
             )
-            tb = None
-            if record.exc_info:
-                exc_type, exc_value, exc_traceback = record.exc_info
-                tb = Traceback.from_exception(exc_type, exc_value, exc_traceback, extra_lines=1)
-                self._console.print(tb)
 
         except RecursionError:
             raise
+        except ImportError:
+            # Error when shutting down the console...
+            pass
         except Exception:
             self.handleError(record)

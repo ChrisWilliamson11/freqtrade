@@ -5,7 +5,7 @@ Helpers when analyzing backtest data
 import logging
 import zipfile
 from copy import copy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any, Literal
@@ -13,7 +13,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from freqtrade.constants import LAST_BT_RESULT_FN, IntOrInf
+from freqtrade.constants import LAST_BT_RESULT_FN
 from freqtrade.exceptions import ConfigurationError, OperationalException
 from freqtrade.ft_types import BacktestHistoryEntryType, BacktestResultType
 from freqtrade.misc import file_dump_json, json_load
@@ -52,6 +52,7 @@ BT_DATA_COLUMNS = [
     "open_timestamp",
     "close_timestamp",
     "orders",
+    "funding_fees",
 ]
 
 
@@ -323,7 +324,7 @@ def find_existing_backtest_stats(
 
             if min_backtest_date is not None:
                 backtest_date = strategy_metadata["backtest_start_time"]
-                backtest_date = datetime.fromtimestamp(backtest_date, tz=timezone.utc)
+                backtest_date = datetime.fromtimestamp(backtest_date, tz=UTC)
                 if backtest_date < min_backtest_date:
                     # Do not use a cached result for this strategy as first result is too old.
                     del run_ids[strategy_name]
@@ -356,6 +357,8 @@ def _load_backtest_data_df_compatibility(df: pd.DataFrame) -> pd.DataFrame:
         df["max_stake_amount"] = df["stake_amount"]
     if "orders" not in df.columns:
         df["orders"] = None
+    if "funding_fees" not in df.columns:
+        df["funding_fees"] = 0.0
     return df
 
 
@@ -376,7 +379,7 @@ def load_backtest_data(filename: Path | str, strategy: str | None = None) -> pd.
 
         if not strategy:
             if len(data["strategy"]) == 1:
-                strategy = list(data["strategy"].keys())[0]
+                strategy = next(iter(data["strategy"].keys()))
             else:
                 raise ValueError(
                     "Detected backtest result with more than one strategy. "
@@ -427,7 +430,7 @@ def load_file_from_zip(zip_path: Path, filename: str) -> bytes:
         raise ValueError(f"Bad zip file: {zip_path}.") from None
 
 
-def load_backtest_analysis_data(backtest_dir: Path, name: str):
+def load_backtest_analysis_data(backtest_dir: Path, name: Literal["signals", "rejected", "exited"]):
     """
     Load backtest analysis data either from a pickle file or from within a zip file
     :param backtest_dir: Directory containing backtest results
@@ -468,76 +471,6 @@ def load_backtest_analysis_data(backtest_dir: Path, name: str):
         except Exception:
             logger.exception(f"Cannot load {name} data from pickled results.")
             return None
-
-
-def load_rejected_signals(backtest_dir: Path):
-    """
-    Load rejected signals from backtest directory
-    """
-    return load_backtest_analysis_data(backtest_dir, "rejected")
-
-
-def load_signal_candles(backtest_dir: Path):
-    """
-    Load signal candles from backtest directory
-    """
-    return load_backtest_analysis_data(backtest_dir, "signals")
-
-
-def load_exit_signal_candles(backtest_dir: Path) -> dict[str, dict[str, pd.DataFrame]]:
-    """
-    Load exit signal candles from backtest directory
-    """
-    return load_backtest_analysis_data(backtest_dir, "exited")
-
-
-def analyze_trade_parallelism(results: pd.DataFrame, timeframe: str) -> pd.DataFrame:
-    """
-    Find overlapping trades by expanding each trade once per period it was open
-    and then counting overlaps.
-    :param results: Results Dataframe - can be loaded
-    :param timeframe: Timeframe used for backtest
-    :return: dataframe with open-counts per time-period in timeframe
-    """
-    from freqtrade.exchange import timeframe_to_resample_freq
-
-    timeframe_freq = timeframe_to_resample_freq(timeframe)
-    dates = [
-        pd.Series(
-            pd.date_range(
-                row[1]["open_date"],
-                row[1]["close_date"],
-                freq=timeframe_freq,
-                # Exclude right boundary - the date is the candle open date.
-                inclusive="left",
-            )
-        )
-        for row in results[["open_date", "close_date"]].iterrows()
-    ]
-    deltas = [len(x) for x in dates]
-    dates = pd.Series(pd.concat(dates).values, name="date")
-    df2 = pd.DataFrame(np.repeat(results.values, deltas, axis=0), columns=results.columns)
-
-    df2 = pd.concat([dates, df2], axis=1)
-    df2 = df2.set_index("date")
-    df_final = df2.resample(timeframe_freq)[["pair"]].count()
-    df_final = df_final.rename({"pair": "open_trades"}, axis=1)
-    return df_final
-
-
-def evaluate_result_multi(
-    results: pd.DataFrame, timeframe: str, max_open_trades: IntOrInf
-) -> pd.DataFrame:
-    """
-    Find overlapping trades by expanding each trade once per period it was open
-    and then counting overlaps
-    :param results: Results Dataframe - can be loaded
-    :param timeframe: Frequency used for the backtest
-    :param max_open_trades: parameter max_open_trades used during backtest run
-    :return: dataframe with open-counts per time-period in freq
-    """
-    df_final = analyze_trade_parallelism(results, timeframe)
-    return df_final[df_final["open_trades"] > max_open_trades]
 
 
 def trade_list_to_dataframe(trades: list[Trade] | list[LocalTrade]) -> pd.DataFrame:

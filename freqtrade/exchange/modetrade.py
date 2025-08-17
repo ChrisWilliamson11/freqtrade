@@ -1,7 +1,6 @@
-"""CoinbasePro exchange subclass"""
-
 import logging
 
+# from freqtrade.enums import MarginMode, TradingMode
 from freqtrade.exchange import Exchange
 from freqtrade.exchange.exchange_types import FtHas
 
@@ -9,9 +8,9 @@ from freqtrade.exchange.exchange_types import FtHas
 logger = logging.getLogger(__name__)
 
 
-class Coinbasepro(Exchange):
+class Modetrade(Exchange):
     """
-    CoinbasePro exchange class. Contains adjustments needed for Freqtrade to work
+    MOdetrade exchange class. Contains adjustments needed for Freqtrade to work
     with this exchange.
 
     Please note that this exchange is not included in the list of exchanges
@@ -20,5 +19,9 @@ class Coinbasepro(Exchange):
     """
 
     _ft_has: FtHas = {
-        "ohlcv_candle_limit": 300,
+        "always_require_api_keys": True,  # Requires API keys to fetch candles
     }
+
+    # _supported_trading_mode_margin_pairs: list[tuple[TradingMode, MarginMode]] = [
+    #     (TradingMode.FUTURES, MarginMode.ISOLATED),
+    # ]

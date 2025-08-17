@@ -7,11 +7,9 @@ from freqtrade.configuration import TimeRange
 from freqtrade.constants import Config
 from freqtrade.data.btanalysis import (
     BT_DATA_COLUMNS,
+    load_backtest_analysis_data,
     load_backtest_data,
     load_backtest_stats,
-    load_exit_signal_candles,
-    load_rejected_signals,
-    load_signal_candles,
 )
 from freqtrade.exceptions import ConfigurationError, OperationalException
 from freqtrade.util import print_df_rich_table
@@ -281,7 +279,7 @@ def _merge_dfs(
 ):
     merge_on = ["pair", "open_date"]
     signal_wide_indicators = list(set(available_inds) - set(BT_DATA_COLUMNS))
-    columns_to_keep = merge_on + ["enter_reason", "exit_reason"]
+    columns_to_keep = [*merge_on, "enter_reason", "exit_reason"]
 
     if exit_df is None or exit_df.empty or entry_only is True:
         return entry_df[columns_to_keep + available_inds]
@@ -331,7 +329,9 @@ def process_entry_exit_reasons(config: Config):
         exit_only = config.get("exit_only", False)
         do_rejected = config.get("analysis_rejected", False)
         to_csv = config.get("analysis_to_csv", False)
-        csv_path = Path(config.get("analysis_csv_path", config["exportfilename"]))
+        csv_path = Path(
+            config.get("analysis_csv_path", config["exportfilename"]),  # type: ignore[arg-type]
+        )
 
         if entry_only is True and exit_only is True:
             raise OperationalException(
@@ -352,12 +352,14 @@ def process_entry_exit_reasons(config: Config):
             trades = load_backtest_data(config["exportfilename"], strategy_name)
 
             if trades is not None and not trades.empty:
-                signal_candles = load_signal_candles(config["exportfilename"])
-                exit_signals = load_exit_signal_candles(config["exportfilename"])
+                signal_candles = load_backtest_analysis_data(config["exportfilename"], "signals")
+                exit_signals = load_backtest_analysis_data(config["exportfilename"], "exited")
 
                 rej_df = None
                 if do_rejected:
-                    rejected_signals_dict = load_rejected_signals(config["exportfilename"])
+                    rejected_signals_dict = load_backtest_analysis_data(
+                        config["exportfilename"], "rejected"
+                    )
                     rej_df = prepare_results(
                         rejected_signals_dict,
                         strategy_name,

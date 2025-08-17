@@ -3,7 +3,7 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from collections import deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -76,7 +76,7 @@ class IFreqaiModel(ABC):
 
         self.dd = FreqaiDataDrawer(Path(self.full_path), self.config)
         # set current candle to arbitrary historical date
-        self.current_candle: datetime = datetime.fromtimestamp(637887600, tz=timezone.utc)
+        self.current_candle: datetime = datetime.fromtimestamp(637887600, tz=UTC)
         self.dd.current_candle = self.current_candle
         self.scanning = False
         self.ft_params = self.freqai_info["feature_parameters"]
@@ -426,7 +426,7 @@ class IFreqaiModel(ABC):
         # append the historic data once per round
         if self.dd.historic_data:
             self.dd.update_historic_data(strategy, dk)
-            logger.debug(f'Updating historic data on pair {metadata["pair"]}')
+            logger.debug(f"Updating historic data on pair {metadata['pair']}")
             self.track_current_candle()
 
         (_, new_trained_timerange, data_load_timerange) = dk.check_if_new_training_required(
@@ -514,12 +514,7 @@ class IFreqaiModel(ABC):
                    current coin/bot loop
         """
 
-        if "training_features_list_raw" in dk.data:
-            feature_list = dk.data["training_features_list_raw"]
-        else:
-            feature_list = dk.data["training_features_list"]
-
-        if dk.training_features_list != feature_list:
+        if dk.training_features_list != dk.data["training_features_list"]:
             raise OperationalException(
                 "Trying to access pretrained model with `identifier` "
                 "but found different features furnished by current strategy. "
@@ -618,7 +613,7 @@ class IFreqaiModel(ABC):
         )
 
         unfiltered_dataframe = dk.use_strategy_to_populate_indicators(
-            strategy, corr_dataframes, base_dataframes, pair
+            strategy, corr_dataframes=corr_dataframes, base_dataframes=base_dataframes, pair=pair
         )
 
         trained_timestamp = new_trained_timerange.stopts
@@ -763,6 +758,8 @@ class IFreqaiModel(ABC):
             init_model = None
         else:
             init_model = self.dd.model_dictionary[pair]
+            # Set "fresh" tb_logger - the one in model_dictionary has the writer closed.
+            init_model.tb_logger = self.tb_logger
 
         return init_model
 
@@ -773,7 +770,7 @@ class IFreqaiModel(ABC):
         """
         current_pairlist = self.config.get("exchange", {}).get("pair_whitelist")
         if not self.dd.pair_dict:
-            logger.info("Set fresh train queue from whitelist. Queue: {current_pairlist}")
+            logger.info(f"Set fresh train queue from whitelist. Queue: {current_pairlist}")
             return deque(current_pairlist)
 
         best_queue = deque()
@@ -789,7 +786,7 @@ class IFreqaiModel(ABC):
                 best_queue.appendleft(pair)
 
         logger.info(
-            "Set existing queue from trained timestamps. Best approximation queue: {best_queue}"
+            f"Set existing queue from trained timestamps. Best approximation queue: {best_queue}"
         )
         return best_queue
 

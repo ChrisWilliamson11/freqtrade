@@ -3,7 +3,7 @@ import inspect
 import logging
 import random
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +16,7 @@ from pandas import DataFrame
 from sklearn.model_selection import train_test_split
 
 from freqtrade.configuration import TimeRange
-from freqtrade.constants import DOCS_LINK, Config
+from freqtrade.constants import DOCS_LINK, ORDERFLOW_ADDED_COLUMNS, Config
 from freqtrade.data.converter import reduce_dataframe_footprint
 from freqtrade.exceptions import OperationalException
 from freqtrade.exchange import timeframe_to_seconds
@@ -214,7 +214,7 @@ class FreqaiDataKitchen:
         self,
         unfiltered_df: DataFrame,
         training_feature_list: list,
-        label_list: list = list(),
+        label_list: list | None = None,
         training_filter: bool = True,
     ) -> tuple[DataFrame, DataFrame]:
         """
@@ -244,7 +244,7 @@ class FreqaiDataKitchen:
             # we don't care about total row number (total no. datapoints) in training, we only care
             # about removing any row with NaNs
             # if labels has multiple columns (user wants to train multiple modelEs), we detect here
-            labels = unfiltered_df.filter(label_list, axis=1)
+            labels = unfiltered_df.filter(label_list or [], axis=1)
             drop_index_labels = pd.isnull(labels).any(axis=1)
             drop_index_labels = (
                 drop_index_labels.replace(True, 1).replace(False, 0).infer_objects(copy=False)
@@ -341,7 +341,7 @@ class FreqaiDataKitchen:
         full_timerange = TimeRange.parse_timerange(tr)
         config_timerange = TimeRange.parse_timerange(self.config["timerange"])
         if config_timerange.stopts == 0:
-            config_timerange.stopts = int(datetime.now(tz=timezone.utc).timestamp())
+            config_timerange.stopts = int(datetime.now(tz=UTC).timestamp())
         timerange_train = copy.deepcopy(full_timerange)
         timerange_backtest = copy.deepcopy(full_timerange)
 
@@ -525,7 +525,7 @@ class FreqaiDataKitchen:
         :return:
             bool = If the model is expired or not.
         """
-        time = datetime.now(tz=timezone.utc).timestamp()
+        time = datetime.now(tz=UTC).timestamp()
         elapsed_time = (time - trained_timestamp) / 3600  # hours
         max_time = self.freqai_config.get("expiration_hours", 0)
         if max_time > 0:
@@ -536,7 +536,7 @@ class FreqaiDataKitchen:
     def check_if_new_training_required(
         self, trained_timestamp: int
     ) -> tuple[bool, TimeRange, TimeRange]:
-        time = datetime.now(tz=timezone.utc).timestamp()
+        time = datetime.now(tz=UTC).timestamp()
         trained_timerange = TimeRange()
         data_load_timerange = TimeRange()
 
@@ -654,8 +654,8 @@ class FreqaiDataKitchen:
         pair: str,
         tf: str,
         strategy: IStrategy,
-        corr_dataframes: dict = {},
-        base_dataframes: dict = {},
+        corr_dataframes: dict,
+        base_dataframes: dict,
         is_corr_pairs: bool = False,
     ) -> DataFrame:
         """
@@ -709,6 +709,11 @@ class FreqaiDataKitchen:
         skip_columns = [
             (f"{s}_{suffix}") for s in ["date", "open", "high", "low", "close", "volume"]
         ]
+
+        for s in ORDERFLOW_ADDED_COLUMNS:
+            if s in dataframe.columns and f"{s}_{suffix}" in dataframe.columns:
+                skip_columns.append(f"{s}_{suffix}")
+
         dataframe = dataframe.drop(columns=skip_columns)
         return dataframe
 
@@ -773,10 +778,10 @@ class FreqaiDataKitchen:
     def use_strategy_to_populate_indicators(  # noqa: C901
         self,
         strategy: IStrategy,
-        corr_dataframes: dict = {},
-        base_dataframes: dict = {},
+        corr_dataframes: dict[str, DataFrame] | None = None,
+        base_dataframes: dict[str, dict[str, DataFrame]] | None = None,
         pair: str = "",
-        prediction_dataframe: DataFrame = pd.DataFrame(),
+        prediction_dataframe: DataFrame | None = None,
         do_corr_pairs: bool = True,
     ) -> DataFrame:
         """
@@ -793,6 +798,10 @@ class FreqaiDataKitchen:
         :return:
         dataframe: DataFrame = dataframe containing populated indicators
         """
+        if not corr_dataframes:
+            corr_dataframes = {}
+        if not base_dataframes:
+            base_dataframes = {}
 
         # check if the user is using the deprecated populate_any_indicators function
         new_version = inspect.getsource(strategy.populate_any_indicators) == (
@@ -822,7 +831,7 @@ class FreqaiDataKitchen:
                 if tf not in corr_dataframes[p]:
                     corr_dataframes[p][tf] = pd.DataFrame()
 
-        if not prediction_dataframe.empty:
+        if prediction_dataframe is not None and not prediction_dataframe.empty:
             dataframe = prediction_dataframe.copy()
             base_dataframes[self.config["timeframe"]] = dataframe.copy()
         else:

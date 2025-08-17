@@ -1,5 +1,5 @@
 import shutil
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -67,9 +67,9 @@ def test_split_timerange(
 
 def test_check_if_model_expired(mocker, freqai_conf):
     dk = get_patched_data_kitchen(mocker, freqai_conf)
-    now = datetime.now(tz=timezone.utc).timestamp()
+    now = datetime.now(tz=UTC).timestamp()
     assert dk.check_if_model_expired(now) is False
-    now = (datetime.now(tz=timezone.utc) - timedelta(hours=2)).timestamp()
+    now = (datetime.now(tz=UTC) - timedelta(hours=2)).timestamp()
     assert dk.check_if_model_expired(now) is True
     shutil.rmtree(Path(dk.full_path))
 
@@ -150,7 +150,9 @@ def test_get_pair_data_for_features_with_prealoaded_data(mocker, freqai_conf):
     freqai.dd.load_all_pair_histories(timerange, freqai.dk)
 
     _, base_df = freqai.dd.get_base_and_corr_dataframes(timerange, "LTC/BTC", freqai.dk)
-    df = freqai.dk.get_pair_data_for_features("LTC/BTC", "5m", strategy, base_dataframes=base_df)
+    df = freqai.dk.get_pair_data_for_features(
+        "LTC/BTC", "5m", strategy, {}, base_dataframes=base_df
+    )
 
     assert df is base_df["5m"]
     assert not df.empty
@@ -170,7 +172,9 @@ def test_get_pair_data_for_features_without_preloaded_data(mocker, freqai_conf):
     freqai.dd.load_all_pair_histories(timerange, freqai.dk)
 
     base_df = {"5m": pd.DataFrame()}
-    df = freqai.dk.get_pair_data_for_features("LTC/BTC", "5m", strategy, base_dataframes=base_df)
+    df = freqai.dk.get_pair_data_for_features(
+        "LTC/BTC", "5m", strategy, {}, base_dataframes=base_df
+    )
 
     assert df is not base_df["5m"]
     assert not df.empty

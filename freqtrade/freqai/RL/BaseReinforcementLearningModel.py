@@ -3,7 +3,7 @@ import importlib
 import logging
 from abc import abstractmethod
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -138,8 +138,8 @@ class BaseReinforcementLearningModel(IFreqaiModel):
             )
 
         logger.info(
-            f'Training model on {len(dk.data_dictionary["train_features"].columns)}'
-            f' features and {len(dd["train_features"])} data points'
+            f"Training model on {len(dk.data_dictionary['train_features'].columns)}"
+            f" features and {len(dd['train_features'])} data points"
         )
 
         self.set_train_and_eval_environments(dd, prices_train, prices_test, dk)
@@ -239,7 +239,7 @@ class BaseReinforcementLearningModel(IFreqaiModel):
                         pair, refresh=False, side="exit", is_short=trade.is_short
                     )
 
-                now = datetime.now(timezone.utc).timestamp()
+                now = datetime.now(UTC).timestamp()
                 trade_duration = int((now - trade.open_date_utc.timestamp()) / self.base_tf_seconds)
                 current_profit = trade.calc_profit_ratio(current_rate)
                 if trade.is_short:
@@ -318,13 +318,13 @@ class BaseReinforcementLearningModel(IFreqaiModel):
         rename_dict = {
             "%-raw_open": "open",
             "%-raw_low": "low",
-            "%-raw_high": " high",
+            "%-raw_high": "high",
             "%-raw_close": "close",
         }
         rename_dict_old = {
             f"%-{pair}raw_open_{tf}": "open",
             f"%-{pair}raw_low_{tf}": "low",
-            f"%-{pair}raw_high_{tf}": " high",
+            f"%-{pair}raw_high_{tf}": "high",
             f"%-{pair}raw_close_{tf}": "close",
         }
 
@@ -346,8 +346,7 @@ class BaseReinforcementLearningModel(IFreqaiModel):
             )
         elif prices_train.empty:
             raise OperationalException(
-                "No prices found, please follow log warning "
-                "instructions to correct the strategy."
+                "No prices found, please follow log warning instructions to correct the strategy."
             )
 
         prices_train.rename(columns=rename_dict, inplace=True)
@@ -489,7 +488,7 @@ def make_env(
     seed: int,
     train_df: DataFrame,
     price: DataFrame,
-    env_info: dict[str, Any] = {},
+    env_info: dict[str, Any],
 ) -> Callable:
     """
     Utility function for multiprocessed env.
